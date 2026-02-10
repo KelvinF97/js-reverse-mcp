@@ -30,6 +30,7 @@ import * as screenshotTools from './tools/screenshot.js';
 import * as scriptTools from './tools/script.js';
 import * as interactionTools from './tools/interaction.js';
 import * as emulationTools from './tools/emulation.js';
+import * as memoryTools from './tools/memory.js';
 import type {ToolDefinition} from './tools/ToolDefinition.js';
 import * as websocketTools from './tools/websocket.js';
 
@@ -168,6 +169,7 @@ const tools = [
   ...Object.values(scriptTools),
   ...Object.values(interactionTools),
   ...Object.values(emulationTools),
+  ...Object.values(memoryTools),
 
   ...Object.values(websocketTools),
 ] as ToolDefinition[];
