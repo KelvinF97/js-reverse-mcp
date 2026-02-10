@@ -25,6 +25,7 @@ export {
   Locator,
   PredefinedNetworkConditions,
   CDPSessionEvent,
+  KnownDevices,
 } from 'puppeteer-core';
 export {default as puppeteer} from 'puppeteer-core';
 export type * from 'puppeteer-core';
