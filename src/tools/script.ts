@@ -49,7 +49,7 @@ Example with arguments: \`(el) => {
     ),
   },
   handler: async (request, response, context) => {
-    // When paused at a breakpoint, fallback to evaluate_on_callframe
+    // When paused at a breakpoint, evaluate in the paused call frame context
     // to avoid a 30s timeout that would confuse the agent.
     const debugger_ = context.debuggerContext;
     if (debugger_.isEnabled() && debugger_.isPaused()) {

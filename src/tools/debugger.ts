@@ -222,144 +222,6 @@ export const getScriptSource = defineTool({
 });
 
 /**
- * Find a string in a specific script and return its exact position with context.
- * Useful for setting breakpoints in minified files.
- */
-export const findInScript = defineTool({
-  name: 'find_in_script',
-  description:
-    'Finds a string in a specific script and returns its exact line/column position with surrounding context. Ideal for setting breakpoints in minified files where the entire code is on one line.',
-  annotations: {
-    title: 'Find in Script',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: true,
-  },
-  schema: {
-    scriptId: zod
-      .string()
-      .describe('The script ID to search in (from list_scripts).'),
-    query: zod.string().describe('The string to find in the script.'),
-    contextChars: zod
-      .number()
-      .int()
-      .optional()
-      .default(100)
-      .describe(
-        'Number of characters to show before and after the match (default: 100).',
-      ),
-    occurrence: zod
-      .number()
-      .int()
-      .optional()
-      .default(1)
-      .describe('Which occurrence to find (1 = first, 2 = second, etc.).'),
-    caseSensitive: zod
-      .boolean()
-      .optional()
-      .default(true)
-      .describe('Whether the search is case-sensitive (default: true).'),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const {scriptId, query, contextChars, occurrence, caseSensitive} =
-      request.params;
-
-    try {
-      const source = await debugger_.getScriptSource(scriptId);
-
-      if (!source) {
-        response.appendResponseLine(`No source found for script ${scriptId}.`);
-        return;
-      }
-
-      // Find the occurrence
-      const searchSource = caseSensitive ? source : source.toLowerCase();
-      const searchQuery = caseSensitive ? query : query.toLowerCase();
-
-      let position = -1;
-      let currentOccurrence = 0;
-      let searchStart = 0;
-
-      while (currentOccurrence < occurrence) {
-        position = searchSource.indexOf(searchQuery, searchStart);
-        if (position === -1) {
-          break;
-        }
-        currentOccurrence++;
-        searchStart = position + 1;
-      }
-
-      if (position === -1) {
-        response.appendResponseLine(
-          `"${query}" not found in script ${scriptId}${occurrence > 1 ? ` (occurrence ${occurrence})` : ''}.`,
-        );
-        return;
-      }
-
-      // Calculate line and column (0-based for CDP)
-      let lineNumber = 0;
-      let columnNumber = position;
-      for (let i = 0; i < position; i++) {
-        if (source[i] === '\n') {
-          lineNumber++;
-          columnNumber = position - i - 1;
-        }
-      }
-
-      // Extract context
-      const contextStart = Math.max(0, position - contextChars);
-      const contextEnd = Math.min(
-        source.length,
-        position + query.length + contextChars,
-      );
-
-      const beforeContext = source.substring(contextStart, position);
-      const matchText = source.substring(position, position + query.length);
-      const afterContext = source.substring(
-        position + query.length,
-        contextEnd,
-      );
-
-      const prefix = contextStart > 0 ? '...' : '';
-      const suffix = contextEnd < source.length ? '...' : '';
-
-      const script = debugger_.getScriptById(scriptId);
-      const url = script?.url || '(inline)';
-
-      response.appendResponseLine(`Found "${query}" in script ${scriptId}:`);
-      response.appendResponseLine(`URL: ${url}`);
-      response.appendResponseLine(
-        `Position: line ${lineNumber + 1}, column ${columnNumber}`,
-      );
-      response.appendResponseLine(`Character offset: ${position}`);
-      response.appendResponseLine('');
-      response.appendResponseLine('Context:');
-      response.appendResponseLine('```javascript');
-      response.appendResponseLine(
-        `${prefix}${beforeContext}【${matchText}】${afterContext}${suffix}`,
-      );
-      response.appendResponseLine('```');
-      response.appendResponseLine('');
-      response.appendResponseLine(
-        `To set a breakpoint here: set_breakpoint(url: "${url}", lineNumber: ${lineNumber + 1}, columnNumber: ${columnNumber})`,
-      );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
  * Search for a string in all loaded scripts.
  */
 export const searchInSources = defineTool({
@@ -542,99 +404,6 @@ export const searchInSources = defineTool({
 });
 
 /**
- * Set a breakpoint in a script.
- */
-export const setBreakpoint = defineTool({
-  name: 'set_breakpoint',
-  description:
-    'Sets a breakpoint in a JavaScript file at the specified line. The breakpoint will trigger when the code executes. Breakpoints persist across page navigations (reload/goto/back/forward) and are automatically restored.',
-  annotations: {
-    title: 'Set Breakpoint',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {
-    url: zod
-      .string()
-      .describe(
-        'The URL of the JavaScript file (can be a partial match or regex pattern).',
-      ),
-    lineNumber: zod
-      .number()
-      .int()
-      .describe('The line number to set the breakpoint (1-based).'),
-    columnNumber: zod
-      .number()
-      .int()
-      .optional()
-      .default(0)
-      .describe('Optional column number (0-based).'),
-    condition: zod
-      .string()
-      .optional()
-      .describe(
-        'Optional condition expression. The breakpoint only triggers when this evaluates to true.',
-      ),
-    isRegex: zod
-      .boolean()
-      .optional()
-      .default(false)
-      .describe('Whether to treat the URL as a regex pattern.'),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const {url, lineNumber, columnNumber, condition, isRegex} = request.params;
-
-    try {
-      let breakpointInfo;
-      // Convert 1-based to 0-based line number
-      const line0based = lineNumber - 1;
-
-      if (isRegex) {
-        breakpointInfo = await debugger_.setBreakpointByUrlRegex(
-          url,
-          line0based,
-          columnNumber,
-          condition,
-        );
-      } else {
-        breakpointInfo = await debugger_.setBreakpoint(
-          url,
-          line0based,
-          columnNumber,
-          condition,
-        );
-      }
-
-      response.appendResponseLine(`Breakpoint set successfully!`);
-      response.appendResponseLine(`- ID: ${breakpointInfo.breakpointId}`);
-      response.appendResponseLine(`- URL: ${url}`);
-      response.appendResponseLine(`- Line: ${lineNumber}`);
-      if (condition) {
-        response.appendResponseLine(`- Condition: ${condition}`);
-      }
-      if (breakpointInfo.locations.length > 0) {
-        response.appendResponseLine(
-          `- Resolved to ${breakpointInfo.locations.length} location(s)`,
-        );
-      }
-    } catch (error) {
-      response.appendResponseLine(
-        `Error setting breakpoint: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
  * Remove a breakpoint.
  */
 export const removeBreakpoint = defineTool({
@@ -650,7 +419,7 @@ export const removeBreakpoint = defineTool({
     breakpointId: zod
       .string()
       .describe(
-        'The breakpoint ID to remove (from list_breakpoints or set_breakpoint).',
+        'The breakpoint ID to remove (from list_breakpoints or set_breakpoint_on_text).',
       ),
   },
   handler: async (request, response, context) => {
@@ -1182,98 +951,6 @@ export const stepOut = defineTool({
 });
 
 /**
- * Evaluate expression in the current call frame context.
- */
-export const evaluateOnCallframe = defineTool({
-  name: 'evaluate_on_callframe',
-  description:
-    'Evaluates a JavaScript expression in the context of a specific call frame while paused. This allows you to inspect variables and execute code in the paused scope.',
-  annotations: {
-    title: 'Evaluate on Call Frame',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: true,
-  },
-  schema: {
-    expression: zod.string().describe('The JavaScript expression to evaluate.'),
-    frameIndex: zod
-      .number()
-      .int()
-      .optional()
-      .default(0)
-      .describe(
-        'The call frame index to evaluate in (0 = top frame, default: 0).',
-      ),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const pausedState = debugger_.getPausedState();
-
-    if (!pausedState.isPaused) {
-      response.appendResponseLine('Execution is not paused. Cannot evaluate.');
-      return;
-    }
-
-    const {expression, frameIndex} = request.params;
-
-    if (frameIndex >= pausedState.callFrames.length) {
-      response.appendResponseLine(
-        `Invalid frame index ${frameIndex}. Available frames: 0-${pausedState.callFrames.length - 1}`,
-      );
-      return;
-    }
-
-    const callFrameId = pausedState.callFrames[frameIndex].callFrameId;
-
-    try {
-      const result = await debugger_.evaluateOnCallFrame(
-        callFrameId,
-        expression,
-        {
-          returnByValue: true,
-          generatePreview: true,
-        },
-      );
-
-      if (result.exceptionDetails) {
-        response.appendResponseLine(
-          `❌ Error: ${result.exceptionDetails.text}`,
-        );
-        if (result.exceptionDetails.exception) {
-          response.appendResponseLine(
-            `   ${result.exceptionDetails.exception.description || ''}`,
-          );
-        }
-      } else {
-        response.appendResponseLine(`📝 Result:`);
-        if (result.result.value !== undefined) {
-          const valueStr =
-            typeof result.result.value === 'string'
-              ? `"${result.result.value}"`
-              : JSON.stringify(result.result.value, null, 2);
-          response.appendResponseLine(valueStr);
-        } else {
-          response.appendResponseLine(
-            result.result.description || `[${result.result.type}]`,
-          );
-        }
-      }
-    } catch (error) {
-      response.appendResponseLine(
-        `Error evaluating: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
  * Set a breakpoint on specific code text (function name, statement, etc.)
  * Combines search + locate + set breakpoint in one step.
  */
@@ -1632,7 +1309,7 @@ export const traceFunction = defineTool({
         }
         response.appendResponseLine('');
         response.appendResponseLine(
-          'Tip: Use search_in_sources to find the exact function signature, then use set_breakpoint.',
+          'Tip: Use search_in_sources to find the exact function signature, then use set_breakpoint_on_text.',
         );
         return;
       }

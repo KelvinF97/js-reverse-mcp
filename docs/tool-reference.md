@@ -23,8 +23,6 @@
   - [`take_screenshot`](#take_screenshot)
 - **[JS Reverse Engineering](#js-reverse-engineering)** (22 tools)
   - [`break_on_xhr`](#break_on_xhr)
-  - [`evaluate_on_callframe`](#evaluate_on_callframe)
-  - [`find_in_script`](#find_in_script)
   - [`get_paused_info`](#get_paused_info)
   - [`get_request_initiator`](#get_request_initiator)
   - [`get_script_source`](#get_script_source)
@@ -38,7 +36,6 @@
   - [`remove_xhr_breakpoint`](#remove_xhr_breakpoint)
   - [`resume`](#resume)
   - [`search_in_sources`](#search_in_sources)
-  - [`set_breakpoint`](#set_breakpoint)
   - [`set_breakpoint_on_text`](#set_breakpoint_on_text)
   - [`step_into`](#step_into)
   - [`step_out`](#step_out)
@@ -251,31 +248,6 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ---
 
-### `evaluate_on_callframe`
-
-**Description:** Evaluates a JavaScript expression in the context of a specific call frame while paused. This allows you to inspect variables and execute code in the paused scope.
-
-**Parameters:**
-
-- **expression** (string) **(required)**: The JavaScript expression to evaluate.
-- **frameIndex** (integer) _(optional)_: The call frame index to evaluate in (0 = top frame, default: 0).
-
----
-
-### `find_in_script`
-
-**Description:** Finds a string in a specific script and returns its exact line/column position with surrounding context. Ideal for setting breakpoints in minified files where the entire code is on one line.
-
-**Parameters:**
-
-- **caseSensitive** (boolean) _(optional)_: Whether the search is case-sensitive (default: true).
-- **contextChars** (integer) _(optional)_: Number of characters to show before and after the match (default: 100).
-- **occurrence** (integer) _(optional)_: Which occurrence to find (1 = first, 2 = second, etc.).
-- **query** (string) **(required)**: The string to find in the script.
-- **scriptId** (string) **(required)**: The script ID to search in (from [`list_scripts`](#list_scripts)).
-
----
-
 ### `get_paused_info`
 
 **Description:** Gets information about the current paused state including call stack, current location, and scope variables. Use this after a breakpoint is hit to understand the execution context.
@@ -361,7 +333,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 **Parameters:**
 
-- **breakpointId** (string) **(required)**: The breakpoint ID to remove (from [`list_breakpoints`](#list_breakpoints) or [`set_breakpoint`](#set_breakpoint)).
+- **breakpointId** (string) **(required)**: The breakpoint ID to remove (from [`list_breakpoints`](#list_breakpoints) or [`set_breakpoint_on_text`](#set_breakpoint_on_text)).
 
 ---
 
@@ -406,20 +378,6 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 - **maxResults** (integer) _(optional)_: Maximum number of results to return (default: 30).
 - **query** (string) **(required)**: The search query (string or regex pattern).
 - **urlFilter** (string) _(optional)_: Only search scripts whose URL contains this string (case-insensitive).
-
----
-
-### `set_breakpoint`
-
-**Description:** Sets a breakpoint in a JavaScript file at the specified line. The breakpoint will trigger when the code executes. Breakpoints persist across page navigations (reload/goto/back/forward) and are automatically restored.
-
-**Parameters:**
-
-- **columnNumber** (integer) _(optional)_: Optional column number (0-based).
-- **condition** (string) _(optional)_: Optional condition expression. The breakpoint only triggers when this evaluates to true.
-- **isRegex** (boolean) _(optional)_: Whether to treat the URL as a regex pattern.
-- **lineNumber** (integer) **(required)**: The line number to set the breakpoint (1-based).
-- **url** (string) **(required)**: The URL of the JavaScript file (can be a partial match or regex pattern).
 
 ---
 
