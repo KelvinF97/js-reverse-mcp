@@ -1735,3 +1735,116 @@ export const traceFunction = defineTool({
     }
   },
 });
+
+/**
+ * Inject a script to run before every page load.
+ * Uses CDP Page.addScriptToEvaluateOnNewDocument.
+ */
+export const injectBeforeLoad = defineTool({
+  name: 'inject_before_load',
+  description:
+    'Injects a JavaScript script that runs before any page script on every page load (including refreshes and navigations). Persists until removed. Uses CDP Page.addScriptToEvaluateOnNewDocument.',
+  annotations: {
+    title: 'Inject Before Load',
+    category: ToolCategory.REVERSE_ENGINEERING,
+    readOnlyHint: false,
+  },
+  schema: {
+    script: zod
+      .string()
+      .describe(
+        'JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this._h5sign = v; }, get() { return this._h5sign; } })',
+      ),
+  },
+  handler: async (request, response, context) => {
+    const debugger_ = context.debuggerContext;
+
+    if (!debugger_.isEnabled()) {
+      response.appendResponseLine(
+        'Debugger is not enabled. Please select a page first.',
+      );
+      return;
+    }
+
+    const client = debugger_.getClient();
+    if (!client) {
+      response.appendResponseLine('Debugger client not available.');
+      return;
+    }
+
+    const {script} = request.params;
+
+    try {
+      const result = await client.send(
+        'Page.addScriptToEvaluateOnNewDocument',
+        {source: script},
+      );
+      const identifier = result.identifier;
+      response.appendResponseLine(
+        `Script injected. Identifier: ${identifier}`,
+      );
+      response.appendResponseLine(
+        'It will run before any page script on every load.',
+      );
+      response.appendResponseLine(
+        `Use remove_injected_script(identifier: "${identifier}") to remove.`,
+      );
+    } catch (error) {
+      response.appendResponseLine(
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  },
+});
+
+/**
+ * Remove an injected script.
+ */
+export const removeInjectedScript = defineTool({
+  name: 'remove_injected_script',
+  description:
+    'Removes a script previously injected with inject_before_load.',
+  annotations: {
+    title: 'Remove Injected Script',
+    category: ToolCategory.REVERSE_ENGINEERING,
+    readOnlyHint: false,
+  },
+  schema: {
+    identifier: zod
+      .string()
+      .describe(
+        'The identifier returned by inject_before_load.',
+      ),
+  },
+  handler: async (request, response, context) => {
+    const debugger_ = context.debuggerContext;
+
+    if (!debugger_.isEnabled()) {
+      response.appendResponseLine(
+        'Debugger is not enabled. Please select a page first.',
+      );
+      return;
+    }
+
+    const client = debugger_.getClient();
+    if (!client) {
+      response.appendResponseLine('Debugger client not available.');
+      return;
+    }
+
+    const {identifier} = request.params;
+
+    try {
+      await client.send('Page.removeScriptToEvaluateOnNewDocument', {
+        identifier,
+      });
+      response.appendResponseLine(
+        `Injected script ${identifier} removed.`,
+      );
+    } catch (error) {
+      response.appendResponseLine(
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  },
+});

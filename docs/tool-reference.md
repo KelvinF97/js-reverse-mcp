@@ -21,18 +21,20 @@
   - [`list_frames`](#list_frames)
   - [`select_frame`](#select_frame)
   - [`take_screenshot`](#take_screenshot)
-- **[JS Reverse Engineering](#js-reverse-engineering)** (20 tools)
+- **[JS Reverse Engineering](#js-reverse-engineering)** (22 tools)
   - [`break_on_xhr`](#break_on_xhr)
   - [`evaluate_on_callframe`](#evaluate_on_callframe)
   - [`find_in_script`](#find_in_script)
   - [`get_paused_info`](#get_paused_info)
   - [`get_request_initiator`](#get_request_initiator)
   - [`get_script_source`](#get_script_source)
+  - [`inject_before_load`](#inject_before_load)
   - [`list_breakpoints`](#list_breakpoints)
   - [`list_scripts`](#list_scripts)
   - [`pause`](#pause)
   - [`remove_all_breakpoints`](#remove_all_breakpoints)
   - [`remove_breakpoint`](#remove_breakpoint)
+  - [`remove_injected_script`](#remove_injected_script)
   - [`remove_xhr_breakpoint`](#remove_xhr_breakpoint)
   - [`resume`](#resume)
   - [`search_in_sources`](#search_in_sources)
@@ -309,6 +311,16 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ---
 
+### `inject_before_load`
+
+**Description:** Injects a JavaScript script that runs before any page script on every page load (including refreshes and navigations). Persists until removed. Uses CDP Page.addScriptToEvaluateOnNewDocument.
+
+**Parameters:**
+
+- **script** (string) **(required)**: JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this.\_h5sign = v; }, get() { return this.\_h5sign; } })
+
+---
+
 ### `list_breakpoints`
 
 **Description:** Lists all active breakpoints in the current debugging session.
@@ -350,6 +362,16 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 **Parameters:**
 
 - **breakpointId** (string) **(required)**: The breakpoint ID to remove (from [`list_breakpoints`](#list_breakpoints) or [`set_breakpoint`](#set_breakpoint)).
+
+---
+
+### `remove_injected_script`
+
+**Description:** Removes a script previously injected with [`inject_before_load`](#inject_before_load).
+
+**Parameters:**
+
+- **identifier** (string) **(required)**: The identifier returned by [`inject_before_load`](#inject_before_load).
 
 ---
 
