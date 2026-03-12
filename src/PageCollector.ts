@@ -103,7 +103,7 @@ export class PageCollector<T> {
   ) => ListenerMap<PageEvents>;
   #listeners = new WeakMap<Page, ListenerMap>();
   #maxNavigationSaved = 3;
-  #maxItemsPerNavigation = 100;
+  #maxItemsPerNavigation = 1000;
 
   /**
    * This maps a Page to a list of navigations with a sub-list
