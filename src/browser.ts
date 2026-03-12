@@ -62,6 +62,13 @@ export async function ensureBrowserConnected(options: {
   }
 
   browserResult = {browser, context};
+
+  // Clear cached result when browser disconnects so we can reconnect.
+  browser.on('disconnected', () => {
+    logger('Browser disconnected, clearing cached browser result');
+    browserResult = undefined;
+  });
+
   return browserResult;
 }
 
@@ -201,6 +208,22 @@ export async function ensureBrowserLaunched(
     return browserResult;
   }
   browserResult = await launch(options);
+
+  // Clear cached result when browser is manually closed so we can relaunch.
+  const {browser, context} = browserResult;
+  if (browser) {
+    browser.on('disconnected', () => {
+      logger('Browser disconnected, clearing cached browser result');
+      browserResult = undefined;
+    });
+  } else {
+    // Persistent context mode (no browser object) — listen on context.
+    context.on('close', () => {
+      logger('Browser context closed, clearing cached browser result');
+      browserResult = undefined;
+    });
+  }
+
   return browserResult;
 }
 
