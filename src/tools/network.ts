@@ -33,7 +33,7 @@ const FILTERABLE_RESOURCE_TYPES = [
 
 export const listNetworkRequests = defineTool({
   name: 'list_network_requests',
-  description: `List all requests for the currently selected page since the last navigation.`,
+  description: `List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate.`,
   annotations: {
     category: ToolCategory.NETWORK,
     readOnlyHint: true,
@@ -45,7 +45,7 @@ export const listNetworkRequests = defineTool({
       .positive()
       .optional()
       .describe(
-        'Maximum number of requests to return. When omitted, returns all requests.',
+        'Maximum number of requests to return. Defaults to 20.',
       ),
     pageIdx: zod
       .number()

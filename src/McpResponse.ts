@@ -413,11 +413,14 @@ export class McpResponse implements Response {
         });
       }
 
+      // Show newest requests first
+      requests.reverse();
+
       response.push('## Network requests');
       if (requests.length) {
         const data = this.#dataWithPagination(
           requests,
-          this.#networkRequestsOptions.pagination,
+          this.#networkRequestsOptions.pagination ?? {pageSize: 20, pageIdx: 0},
         );
         response.push(...data.info);
         for (const request of data.items) {

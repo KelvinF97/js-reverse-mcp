@@ -103,6 +103,7 @@ export class PageCollector<T> {
   ) => ListenerMap<PageEvents>;
   #listeners = new WeakMap<Page, ListenerMap>();
   #maxNavigationSaved = 3;
+  #maxItemsPerNavigation = 100;
 
   /**
    * This maps a Page to a list of navigations with a sub-list
@@ -161,6 +162,9 @@ export class PageCollector<T> {
 
       const navigations = this.storage.get(page) ?? [[]];
       navigations[0].push(withId);
+      if (navigations[0].length > this.#maxItemsPerNavigation) {
+        navigations[0].shift();
+      }
     });
 
     listeners['framenavigated'] = (frame: Frame) => {
