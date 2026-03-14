@@ -247,6 +247,86 @@ export const getScriptSource = defineTool({
 });
 
 /**
+ * Save full script source to a local file.
+ */
+export const saveScriptSource = defineTool({
+  name: 'save_script_source',
+  description:
+    'Saves the full source code of a JavaScript script to a local file. Use this to download complete script sources for offline analysis, especially for large or minified files that are too big to view inline with get_script_source.',
+  annotations: {
+    title: 'Save Script Source',
+    category: ToolCategory.REVERSE_ENGINEERING,
+    readOnlyHint: false,
+  },
+  schema: {
+    url: zod
+      .string()
+      .optional()
+      .describe(
+        'Script URL (preferred). Stable across page navigations. Exact match first, then substring match.',
+      ),
+    scriptId: zod
+      .string()
+      .optional()
+      .describe(
+        'Script ID (from list_scripts). Becomes invalid after page navigation — prefer url instead.',
+      ),
+    filePath: zod
+      .string()
+      .describe('Local file path to save the script source to.'),
+  },
+  handler: async (request, response, context) => {
+    const debugger_ = context.debuggerContext;
+
+    if (!debugger_.isEnabled()) {
+      response.appendResponseLine(
+        'Debugger is not enabled. Please select a page first.',
+      );
+      return;
+    }
+
+    const {url, scriptId, filePath} = request.params;
+
+    if (!url && !scriptId) {
+      response.appendResponseLine(
+        'Either url or scriptId must be provided.',
+      );
+      return;
+    }
+
+    try {
+      let source: string;
+      let resolvedId = scriptId;
+      if (url) {
+        const result = await debugger_.getScriptSourceByUrl(url);
+        source = result.source;
+        resolvedId = result.script.scriptId;
+        response.appendResponseLine(
+          `Resolved URL to script ${resolvedId} (${result.script.url}).`,
+        );
+      } else {
+        source = await debugger_.getScriptSource(scriptId!);
+      }
+
+      if (!source) {
+        response.appendResponseLine(`No source found for script ${resolvedId}.`);
+        return;
+      }
+
+      const data = new TextEncoder().encode(source);
+      const result = await context.saveFile(data, filePath);
+      response.appendResponseLine(
+        `Saved script source to ${result.filename} (${source.length} chars).`,
+      );
+    } catch (error) {
+      response.appendResponseLine(
+        `Error saving script source: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  },
+});
+
+/**
  * Search for a string in all loaded scripts.
  */
 export const searchInSources = defineTool({

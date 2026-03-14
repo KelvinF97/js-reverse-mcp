@@ -21,7 +21,7 @@
   - [`list_frames`](#list_frames)
   - [`select_frame`](#select_frame)
   - [`take_screenshot`](#take_screenshot)
-- **[JS Reverse Engineering](#js-reverse-engineering)** (19 tools)
+- **[JS Reverse Engineering](#js-reverse-engineering)** (20 tools)
   - [`break_on_xhr`](#break_on_xhr)
   - [`get_paused_info`](#get_paused_info)
   - [`get_request_initiator`](#get_request_initiator)
@@ -35,6 +35,7 @@
   - [`remove_injected_script`](#remove_injected_script)
   - [`remove_xhr_breakpoint`](#remove_xhr_breakpoint)
   - [`resume`](#resume)
+  - [`save_script_source`](#save_script_source)
   - [`search_in_sources`](#search_in_sources)
   - [`set_breakpoint_on_text`](#set_breakpoint_on_text)
   - [`step_into`](#step_into)
@@ -366,6 +367,18 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 **Description:** Resumes JavaScript execution after being paused at a breakpoint. Execution continues until the next breakpoint or completion.
 
 **Parameters:** None
+
+---
+
+### `save_script_source`
+
+**Description:** Saves the full source code of a JavaScript script to a local file. Use this to download complete script sources for offline analysis, especially for large or minified files that are too big to view inline with [`get_script_source`](#get_script_source).
+
+**Parameters:**
+
+- **filePath** (string) **(required)**: Local file path to save the script source to.
+- **scriptId** (string) _(optional)_: Script ID (from [`list_scripts`](#list_scripts)). Becomes invalid after page navigation — prefer url instead.
+- **url** (string) _(optional)_: Script URL (preferred). Stable across page navigations. Exact match first, then substring match.
 
 ---
 
