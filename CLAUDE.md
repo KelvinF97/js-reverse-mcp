@@ -87,7 +87,7 @@ Tool categories are defined in `src/tools/categories.ts` and can be disabled via
 
 ### Third-Party Integration
 
-- **`src/third_party/index.ts`**: Re-exports from bundled dependencies (puppeteer, @modelcontextprotocol/sdk, zod).
+- **`src/third_party/index.ts`**: Re-exports from bundled dependencies (patchright, @modelcontextprotocol/sdk, zod).
 
 - **`chrome-devtools-frontend`**: Used for performance trace analysis and issue descriptions. Included via tsconfig.json.
 
