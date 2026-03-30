@@ -257,7 +257,7 @@ export class McpResponse implements Response {
         const mappedIssueMessage = mapIssueToMessageObject(message);
         if (!mappedIssueMessage)
           throw new Error(
-            "Can't prpovide detals for the msgid " + consoleMessageStableId,
+            "Can't provide details for the msgid " + consoleMessageStableId,
           );
         consoleData = {
           consoleMessageStableId,
@@ -476,7 +476,7 @@ export class McpResponse implements Response {
         // 提示使用 analyze 工具
         response.push(``);
         response.push(
-          `> 提示: 使用 \`analyze_websocket_messages(wsid=N)\` 分析消息模式后再查看具体内容`,
+          `> Tip: Use \`analyze_websocket_messages(wsid=N)\` to analyze message patterns before viewing individual messages.`,
         );
       } else {
         response.push('<no WebSocket connections found>');

@@ -4,13 +4,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import {zod} from '../third_party/index.js';
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
-import * as fs from 'fs';
-import * as path from 'path';
 
-const MEMORY_FILE = '.mcp_memory.json';
+function getMemoryFilePath(): string {
+  return path.join(os.homedir(), '.cache', 'js-reverse-mcp', 'memory.json');
+}
 
 interface Memory {
   key: string;
@@ -19,24 +23,19 @@ interface Memory {
   timestamp: string;
 }
 
-function loadMemory(): Memory[] {
+async function loadMemory(): Promise<Memory[]> {
   try {
-    if (fs.existsSync(MEMORY_FILE)) {
-      const content = fs.readFileSync(MEMORY_FILE, 'utf-8');
-      return JSON.parse(content);
-    }
-  } catch (e) {
-    console.error('Failed to load memory:', e);
+    const content = await fs.readFile(getMemoryFilePath(), 'utf-8');
+    return JSON.parse(content);
+  } catch {
+    return [];
   }
-  return [];
 }
 
-function saveMemory(memories: Memory[]) {
-  try {
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memories, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Failed to save memory:', e);
-  }
+async function saveMemory(memories: Memory[]): Promise<void> {
+  const filePath = getMemoryFilePath();
+  await fs.mkdir(path.dirname(filePath), {recursive: true});
+  await fs.writeFile(filePath, JSON.stringify(memories, null, 2), 'utf-8');
 }
 
 export const rememberInsight = defineTool({
@@ -53,9 +52,8 @@ export const rememberInsight = defineTool({
   },
   handler: async (req, response) => {
     const {key, value, tags} = req.params;
-    const memories = loadMemory();
+    const memories = await loadMemory();
 
-    // Update existing or add new
     const index = memories.findIndex(m => m.key === key);
     const newMemory: Memory = {
       key,
@@ -72,7 +70,7 @@ export const rememberInsight = defineTool({
       response.appendResponseLine(`Saved new memory: ${key}`);
     }
 
-    saveMemory(memories);
+    await saveMemory(memories);
   },
 });
 
@@ -88,7 +86,7 @@ export const recallInsight = defineTool({
   },
   handler: async (req, response) => {
     const {query} = req.params;
-    const memories = loadMemory();
+    const memories = await loadMemory();
 
     // Exact match
     const exact = memories.find(m => m.key === query);
@@ -123,7 +121,7 @@ export const listInsights = defineTool({
   },
   schema: {},
   handler: async (_req, response) => {
-    const memories = loadMemory();
+    const memories = await loadMemory();
     if (memories.length === 0) {
       response.appendResponseLine('Memory is empty.');
       return;
