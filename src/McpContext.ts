@@ -254,6 +254,7 @@ export class McpContext implements Context {
     }
     const page = this.getPageByIdx(pageIdx);
     await page.close({runBeforeUnload: false});
+    await this.createPagesSnapshot();
   }
 
   getNetworkRequestById(reqid: number): HTTPRequest {
