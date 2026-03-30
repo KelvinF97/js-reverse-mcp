@@ -4,86 +4,176 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {zod, KnownDevices} from '../third_party/index.js';
+import {zod} from '../third_party/index.js';
+
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
+import type {Context} from './ToolDefinition.js';
 
-// Get a list of common device names for the description
-const commonDevices = [
-  'iPhone 12',
-  'iPhone 12 Pro',
-  'Pixel 5',
-  'iPad',
-  'iPad Pro',
-  'Galaxy S5',
-];
+interface DevicePreset {
+  userAgent: string;
+  viewport: {
+    width: number;
+    height: number;
+    deviceScaleFactor: number;
+    isMobile: boolean;
+    hasTouch: boolean;
+  };
+}
+
+const devicePresets: Record<string, DevicePreset> = {
+  'iPhone 12': {
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    viewport: {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 3,
+      isMobile: true,
+      hasTouch: true,
+    },
+  },
+  'iPhone 12 Pro': {
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 14_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    viewport: {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 3,
+      isMobile: true,
+      hasTouch: true,
+    },
+  },
+  'Pixel 5': {
+    userAgent:
+      'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36',
+    viewport: {
+      width: 393,
+      height: 851,
+      deviceScaleFactor: 2.75,
+      isMobile: true,
+      hasTouch: true,
+    },
+  },
+  iPad: {
+    userAgent:
+      'Mozilla/5.0 (iPad; CPU OS 14_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    viewport: {
+      width: 810,
+      height: 1080,
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+    },
+  },
+  'iPad Pro': {
+    userAgent:
+      'Mozilla/5.0 (iPad; CPU OS 14_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+    viewport: {
+      width: 1024,
+      height: 1366,
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+    },
+  },
+  'Galaxy S5': {
+    userAgent:
+      'Mozilla/5.0 (Linux; Android 6.0.1; SM-G900P Build/MMB29M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36',
+    viewport: {
+      width: 360,
+      height: 640,
+      deviceScaleFactor: 3,
+      isMobile: true,
+      hasTouch: true,
+    },
+  },
+};
+
+const commonDevices = Object.keys(devicePresets);
+
+async function getPageSession(context: Pick<Context, 'getSelectedPage'>) {
+  const page = context.getSelectedPage();
+  const session = await page.context().newCDPSession(page);
+  return {page, session};
+}
 
 export const emulateDevice = defineTool({
   name: 'emulate_device',
-  description: `Emulates a specific device (viewport, user agent, touch support).
-  Useful for testing mobile-specific logic or bypassing desktop-only protections.
-  Common devices: ${commonDevices.join(', ')}.`,
-  annotations: {
-    category: ToolCategory.INTERACTION, // Reuse INTERACTION category or create a new one
-    readOnlyHint: false,
-  },
-  schema: {
-    deviceName: zod.string().describe(`The name of the device to emulate. exact match required (e.g., "iPhone 12").`),
-  },
-  handler: async (req, _response, context) => {
-    const {deviceName} = req.params;
-    const page = context.getSelectedPage();
-
-    // Find device configuration
-    const device = KnownDevices[deviceName as keyof typeof KnownDevices];
-
-    if (!device) {
-      throw new Error(`Device "${deviceName}" not found. Available devices include: ${commonDevices.join(', ')}...`);
-    }
-
-    await page.emulate(device);
-
-    // Try to resize the browser window to match device dimensions
-    try {
-      const client = await page.createCDPSession();
-      // Browser.getWindowForTarget and Browser.setWindowBounds are CDP commands
-      // windowId is returned by Browser.getWindowForTarget
-      const { windowId } = await client.send('Browser.getWindowForTarget');
-
-      await client.send('Browser.setWindowBounds', {
-        windowId,
-        bounds: {
-          width: device.viewport.width,
-          height: device.viewport.height + 85, // Add approximate height for browser chrome/toolbar
-          windowState: 'normal'
-        }
-      });
-    } catch (e) {
-      // Ignore window resize errors (e.g. in headless mode or if not supported)
-    }
-  },
-});
-
-export const setUserAgent = defineTool({
-  name: 'set_user_agent',
-  description: 'Sets the User-Agent string for the current page.',
+  description:
+    `Emulates a specific mobile or tablet device by overriding viewport, touch support, and user agent. Common devices: ${commonDevices.join(', ')}.`,
   annotations: {
     category: ToolCategory.INTERACTION,
     readOnlyHint: false,
   },
   schema: {
-    userAgent: zod.string().describe('The User-Agent string to use.'),
+    deviceName: zod
+      .string()
+      .describe(
+        'The device preset name. Exact match required (e.g., "iPhone 12").',
+      ),
   },
-  handler: async (req, _response, context) => {
-    const {userAgent} = req.params;
-    const page = context.getSelectedPage();
-    await page.setUserAgent(userAgent);
+  handler: async (req, response, context) => {
+    const preset = devicePresets[req.params.deviceName];
+    if (!preset) {
+      throw new Error(
+        `Device "${req.params.deviceName}" not found. Available devices include: ${commonDevices.join(', ')}.`,
+      );
+    }
+
+    const {page, session} = await getPageSession(context);
+
+    await page.setViewportSize({
+      width: preset.viewport.width,
+      height: preset.viewport.height,
+    });
+
+    await session.send('Emulation.setDeviceMetricsOverride', {
+      width: preset.viewport.width,
+      height: preset.viewport.height,
+      deviceScaleFactor: preset.viewport.deviceScaleFactor,
+      mobile: preset.viewport.isMobile,
+      screenWidth: preset.viewport.width,
+      screenHeight: preset.viewport.height,
+    });
+    await session.send('Emulation.setTouchEmulationEnabled', {
+      enabled: preset.viewport.hasTouch,
+      maxTouchPoints: preset.viewport.hasTouch ? 5 : 0,
+    });
+    await session.send('Emulation.setUserAgentOverride', {
+      userAgent: preset.userAgent,
+    });
+
+    response.appendResponseLine(
+      `Device emulation enabled: ${req.params.deviceName}`,
+    );
+  },
+});
+
+export const setUserAgent = defineTool({
+  name: 'set_user_agent',
+  description:
+    'Overrides the user agent string for the current page via CDP emulation.',
+  annotations: {
+    category: ToolCategory.INTERACTION,
+    readOnlyHint: false,
+  },
+  schema: {
+    userAgent: zod.string().describe('The user agent string to use.'),
+  },
+  handler: async (req, response, context) => {
+    const {session} = await getPageSession(context);
+    await session.send('Emulation.setUserAgentOverride', {
+      userAgent: req.params.userAgent,
+    });
+    response.appendResponseLine('User agent override applied.');
   },
 });
 
 export const setGeolocation = defineTool({
   name: 'set_geolocation',
-  description: 'Overrides the Geolocation of the page.',
+  description:
+    'Overrides geolocation for the current browser context and grants geolocation permission for the current page origin.',
   annotations: {
     category: ToolCategory.INTERACTION,
     readOnlyHint: false,
@@ -91,16 +181,27 @@ export const setGeolocation = defineTool({
   schema: {
     latitude: zod.number().describe('Latitude'),
     longitude: zod.number().describe('Longitude'),
-    accuracy: zod.number().optional().describe('Accuracy in meters. Defaults to 100.'),
+    accuracy: zod
+      .number()
+      .optional()
+      .describe('Accuracy in meters. Defaults to 100.'),
   },
-  handler: async (req, _response, context) => {
+  handler: async (req, response, context) => {
     const {latitude, longitude, accuracy = 100} = req.params;
     const page = context.getSelectedPage();
+    const currentUrl = page.url();
+    const origin = currentUrl.startsWith('http')
+      ? new URL(currentUrl).origin
+      : undefined;
 
-    // Grant permissions first
-    const contextBrowser = page.browser().defaultBrowserContext();
-    await contextBrowser.overridePermissions(page.url(), ['geolocation']);
+    if (origin) {
+      await page.context().grantPermissions(['geolocation'], {origin});
+    }
 
-    await page.setGeolocation({latitude, longitude, accuracy});
+    await page.context().setGeolocation({latitude, longitude, accuracy});
+
+    response.appendResponseLine(
+      `Geolocation override applied: ${latitude}, ${longitude}`,
+    );
   },
 });

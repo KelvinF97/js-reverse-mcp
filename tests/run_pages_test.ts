@@ -1,10 +1,10 @@
 
-import { createServer } from 'http';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import {createServer} from 'http';
+import {dirname, join} from 'path';
+import {fileURLToPath} from 'url';
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,17 +39,13 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if (pathname === '/init-script') {
+  if (pathname === '/landing') {
     res.writeHead(200, {'Content-Type': 'text/html'});
     res.end(`
       <!DOCTYPE html>
       <html>
         <body>
-          <div id="boot-result"></div>
-          <script>
-            document.getElementById('boot-result').textContent =
-              window.__bootValue ?? 'missing';
-          </script>
+          <h1>Landing Page</h1>
         </body>
       </html>
     `);
@@ -77,7 +73,10 @@ server.listen(PORT, async () => {
 });
 
 function extractJsonResult(content: any): any {
-  const text = content[0].text;
+  const text = content
+    .filter((item: {type?: string}) => item.type === 'text')
+    .map((item: {text: string}) => item.text)
+    .join('\n');
   const match = text.match(/```json\n([\s\S]*?)\n```/);
   if (match) {
     return JSON.parse(match[1]);
@@ -85,8 +84,14 @@ function extractJsonResult(content: any): any {
   throw new Error(`Could not parse JSON from response: ${text}`);
 }
 
-function extractPages(content: any): Array<{idx: number; url: string; selected: boolean}> {
-  const text = content[0].text;
+function extractPages(
+  content: any,
+): Array<{idx: number; url: string; selected: boolean}> {
+  const text = content
+    .filter((item: {type?: string}) => item.type === 'text')
+    .map((item: {text: string}) => item.text)
+    .join('\n');
+
   return text
     .split('\n')
     .map((line: string) => line.trim())
@@ -132,12 +137,12 @@ async function runTests() {
   if (!toolNames.includes('close_page')) {
     throw new Error('close_page tool missing');
   }
-  if (!toolNames.includes('navigate_page')) {
-    throw new Error('navigate_page tool missing');
+  if (!toolNames.includes('select_page')) {
+    throw new Error('select_page tool missing');
   }
 
   const initialPagesResult = await client.callTool({
-    name: 'list_pages',
+    name: 'select_page',
     arguments: {},
   });
   const initialPages = extractPages(initialPagesResult.content);
@@ -152,7 +157,7 @@ async function runTests() {
   });
 
   const beforeCloseResult = await client.callTool({
-    name: 'list_pages',
+    name: 'select_page',
     arguments: {},
   });
   const beforeClosePages = extractPages(beforeCloseResult.content);
@@ -170,7 +175,7 @@ async function runTests() {
   });
 
   const afterCloseResult = await client.callTool({
-    name: 'list_pages',
+    name: 'select_page',
     arguments: {},
   });
   const afterClosePages = extractPages(afterCloseResult.content);
@@ -183,7 +188,7 @@ async function runTests() {
   }
 
   if (afterClosePages.some(page => page.url.includes('/second'))) {
-    throw new Error('The closed /second page still appears in list_pages output.');
+    throw new Error('The closed /second page still appears in select_page output.');
   }
 
   if (!selectedPageAfterClose) {
@@ -202,28 +207,11 @@ async function runTests() {
 
   await client.callTool({
     name: 'navigate_page',
-    arguments: {
-      url: `http://localhost:${PORT}/init-script`,
-      initScript: 'window.__bootValue = "init-script-ran";',
-    },
+    arguments: {url: `http://localhost:${PORT}/landing`},
   });
-
-  const bootValueResult = await client.callTool({
-    name: 'evaluate_script',
-    arguments: {
-      function: '() => document.getElementById("boot-result")?.textContent',
-    },
-  });
-  const bootValue = extractJsonResult(bootValueResult.content);
-
-  if (bootValue !== 'init-script-ran') {
-    throw new Error(
-      `Expected initScript to run before page scripts, got "${bootValue}"`,
-    );
-  }
 
   const finalPagesResult = await client.callTool({
-    name: 'list_pages',
+    name: 'select_page',
     arguments: {},
   });
   const finalPages = extractPages(finalPagesResult.content);

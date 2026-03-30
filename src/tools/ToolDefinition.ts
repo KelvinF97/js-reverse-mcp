@@ -8,7 +8,7 @@ import type {DebuggerContext} from '../DebuggerContext.js';
 import type {TrafficSummary} from '../formatters/websocketFormatter.js';
 import type {RequestInitiator} from '../PageCollector.js';
 import {zod} from '../third_party/index.js';
-import type {Dialog, HTTPRequest, Page} from '../third_party/index.js';
+import type {Dialog, Frame, HTTPRequest, Page} from '../third_party/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
 import type {WebSocketData} from '../WebSocketCollector.js';
@@ -57,6 +57,7 @@ export interface Response {
     value: boolean,
     options?: PaginationOptions & {
       resourceTypes?: string[];
+      urlFilter?: string;
       includePreservedRequests?: boolean;
       networkRequestIdInDevToolsUI?: number;
     },
@@ -154,6 +155,32 @@ export type Context = Readonly<{
    * Get cached traffic summary for a WebSocket connection.
    */
   getCachedTrafficSummary(wsid: number): TrafficSummary | undefined;
+  /**
+   * Track an injected script for the current page.
+   */
+  trackInjectedScript(identifier: string, source: string): void;
+  /**
+   * Untrack an injected script for the current page.
+   */
+  untrackInjectedScript(identifier: string): boolean;
+  /**
+   * Get all injected script identifiers for the current page.
+   */
+  getInjectedScriptIds(): string[];
+  /**
+   * Get the currently selected frame (or main frame if none selected).
+   */
+  getSelectedFrame(): Frame;
+  /**
+   * Select a specific frame for code execution.
+   * Also reinitializes the debugger for the frame's CDP session.
+   */
+  selectFrame(frame: Frame): void;
+  /**
+   * Reset frame selection back to the main frame.
+   * Also reinitializes the debugger for the main page's CDP session.
+   */
+  resetSelectedFrame(): void;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(

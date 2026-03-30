@@ -4,72 +4,72 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import fs from 'node:fs';
+import type fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import {logger} from './logger.js';
+import {DEFAULT_ARGS, STEALTH_ARGS, HARMFUL_ARGS} from './stealth-args.js';
 import type {
   Browser,
-  ChromeReleaseChannel,
-  LaunchOptions,
-  Target,
+  BrowserContext,
 } from './third_party/index.js';
-import {puppeteer} from './third_party/index.js';
+import {chromium} from './third_party/index.js';
 
-let browser: Browser | undefined;
-
-function makeTargetFilter() {
-  const ignoredPrefixes = new Set([
-    'chrome://',
-    'chrome-extension://',
-    'chrome-untrusted://',
-  ]);
-
-  return function targetFilter(target: Target): boolean {
-    if (target.url() === 'chrome://newtab/') {
-      return true;
-    }
-    for (const prefix of ignoredPrefixes) {
-      if (target.url().startsWith(prefix)) {
-        return false;
-      }
-    }
-    return true;
-  };
+export interface BrowserResult {
+  browser: Browser | undefined;
+  context: BrowserContext;
 }
+
+let browserResult: BrowserResult | undefined;
+
+// Default persistent user data directory for login state, cookies, etc.
+const DEFAULT_USER_DATA_DIR = path.join(os.homedir(), '.cache', 'chrome-devtools-mcp', 'chrome-profile');
 
 export async function ensureBrowserConnected(options: {
   browserURL?: string;
   wsEndpoint?: string;
   wsHeaders?: Record<string, string>;
   devtools: boolean;
-}) {
-  if (browser?.connected) {
-    return browser;
+}): Promise<BrowserResult> {
+  if (browserResult) {
+    return browserResult;
   }
 
-  const connectOptions: Parameters<typeof puppeteer.connect>[0] = {
-    targetFilter: makeTargetFilter(),
-    defaultViewport: null,
-    handleDevToolsAsPage: true,
-  };
+  let endpoint = options.wsEndpoint;
 
-  if (options.wsEndpoint) {
-    connectOptions.browserWSEndpoint = options.wsEndpoint;
-    if (options.wsHeaders) {
-      connectOptions.headers = options.wsHeaders;
-    }
-  } else if (options.browserURL) {
-    connectOptions.browserURL = options.browserURL;
-  } else {
+  // If browserURL is given (e.g. http://localhost:9222), resolve to ws endpoint
+  if (!endpoint && options.browserURL) {
+    const url = new URL('/json/version', options.browserURL);
+    const res = await fetch(url.toString());
+    const json = (await res.json()) as {webSocketDebuggerUrl: string};
+    endpoint = json.webSocketDebuggerUrl;
+  }
+
+  if (!endpoint) {
     throw new Error('Either browserURL or wsEndpoint must be provided');
   }
 
-  logger('Connecting Puppeteer to ', JSON.stringify(connectOptions));
-  browser = await puppeteer.connect(connectOptions);
-  logger('Connected Puppeteer');
-  return browser;
+  logger('Connecting Patchright via CDP to', endpoint);
+  const browser = await chromium.connectOverCDP(endpoint, {
+    headers: options.wsHeaders,
+  });
+  logger('Connected Patchright');
+
+  const context = browser.contexts()[0];
+  if (!context) {
+    throw new Error('No browser context found after connecting');
+  }
+
+  browserResult = {browser, context};
+
+  // Clear cached result when browser disconnects so we can reconnect.
+  browser.on('disconnected', () => {
+    logger('Browser disconnected, clearing cached browser result');
+    browserResult = undefined;
+  });
+
+  return browserResult;
 }
 
 interface McpLaunchOptions {
@@ -86,84 +86,115 @@ interface McpLaunchOptions {
   };
   args?: string[];
   devtools: boolean;
+  hideCanvas?: boolean;
+  blockWebrtc?: boolean;
+  disableWebgl?: boolean;
+  noStealth?: boolean;
 }
 
-export async function launch(options: McpLaunchOptions): Promise<Browser> {
+export async function launch(options: McpLaunchOptions): Promise<BrowserResult> {
   const {channel, executablePath, headless, isolated} = options;
-  const profileDirName =
-    channel && channel !== 'stable'
-      ? `chrome-profile-${channel}`
-      : 'chrome-profile';
 
-  let userDataDir = options.userDataDir;
-  if (!isolated && !userDataDir) {
-    userDataDir = path.join(
-      os.homedir(),
-      '.cache',
-      'chrome-devtools-mcp',
-      profileDirName,
-    );
-    await fs.promises.mkdir(userDataDir, {
-      recursive: true,
-    });
-  }
-
-  const args: LaunchOptions['args'] = [
+  const args: string[] = [
+    ...DEFAULT_ARGS,
+    ...(options.noStealth ? [] : STEALTH_ARGS),
     ...(options.args ?? []),
     '--hide-crash-restore-bubble',
   ];
   if (headless) {
     args.push('--screen-info={3840x2160}');
   }
-  let puppeteerChannel: ChromeReleaseChannel | undefined;
   if (options.devtools) {
     args.push('--auto-open-devtools-for-tabs');
   }
-  if (!executablePath) {
-    puppeteerChannel =
-      channel && channel !== 'stable'
-        ? (`chrome-${channel}` as ChromeReleaseChannel)
-        : 'chrome';
+  if (options.hideCanvas) {
+    args.push('--fingerprinting-canvas-image-data-noise');
+  }
+  if (options.blockWebrtc) {
+    args.push(
+      '--webrtc-ip-handling-policy=disable_non_proxied_udp',
+      '--force-webrtc-ip-handling-policy',
+    );
+  }
+  if (options.disableWebgl) {
+    args.push(
+      '--disable-webgl',
+      '--disable-webgl-image-chromium',
+      '--disable-webgl2',
+    );
   }
 
-  try {
-    const browser = await puppeteer.launch({
-      channel: puppeteerChannel,
-      targetFilter: makeTargetFilter(),
+  // Resolve Chrome channel for Patchright
+  let patchrightChannel: string | undefined;
+  if (!executablePath) {
+    if (channel === 'canary') {
+      patchrightChannel = 'chrome-canary';
+    } else if (channel === 'beta') {
+      patchrightChannel = 'chrome-beta';
+    } else if (channel === 'dev') {
+      patchrightChannel = 'chrome-dev';
+    } else {
+      patchrightChannel = 'chrome';
+    }
+  }
+
+  // Use viewport: null to disable Playwright's viewport emulation.
+  // This exposes real OS window/screen dimensions (no fake 1920x1080).
+  // Note: deviceScaleFactor is incompatible with viewport: null.
+  const hasCustomViewport = !!options.viewport;
+  const contextOptions = {
+    viewport: hasCustomViewport ? options.viewport : null,
+    ...(hasCustomViewport ? {
+      screen: {width: options.viewport!.width, height: options.viewport!.height},
+      deviceScaleFactor: 2,
+    } : {}),
+    colorScheme: 'dark' as const,
+    isMobile: false,
+    hasTouch: false,
+    serviceWorkers: 'allow' as const,
+    permissions: ['geolocation', 'notifications'] as string[],
+    ignoreHTTPSErrors: options.acceptInsecureCerts ?? true,
+  };
+
+  // --isolated mode: launch() + newContext() for clean isolated context.
+  // Creates an incognito-like context with no persisted state.
+  if (isolated) {
+    const browser = await chromium.launch({
+      channel: patchrightChannel,
       executablePath,
-      defaultViewport: null,
-      userDataDir,
-      pipe: true,
       headless,
       args,
-      acceptInsecureCerts: options.acceptInsecureCerts,
-      handleDevToolsAsPage: true,
+      ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
     });
-    if (options.logFile) {
-      // FIXME: we are probably subscribing too late to catch startup logs. We
-      // should expose the process earlier or expose the getRecentLogs() getter.
-      browser.process()?.stderr?.pipe(options.logFile);
-      browser.process()?.stdout?.pipe(options.logFile);
+
+    const context = await browser.newContext(contextOptions);
+
+    if (context.pages().length === 0) {
+      await context.newPage();
     }
-    if (options.viewport) {
-      const [page] = await browser.pages();
-      // @ts-expect-error internal API for now.
-      await page?.resize({
-        contentWidth: options.viewport.width,
-        contentHeight: options.viewport.height,
-      });
-    }
-    return browser;
+
+    return {browser, context};
+  }
+
+  // Default: launchPersistentContext for full state persistence
+  // (cookies, IndexedDB, Cache Storage, Service Workers, localStorage).
+  const userDataDir = options.userDataDir ?? DEFAULT_USER_DATA_DIR;
+  try {
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      channel: patchrightChannel,
+      executablePath,
+      headless,
+      args,
+      ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
+      ...contextOptions,
+    });
+
+    return {browser: undefined, context};
   } catch (error) {
-    if (
-      userDataDir &&
-      (error as Error).message.includes('The browser is already running')
-    ) {
+    if ((error as Error).message.includes('The browser is already running')) {
       throw new Error(
-        `The browser is already running for ${userDataDir}. Use --isolated to run multiple browser instances.`,
-        {
-          cause: error,
-        },
+        `The browser is already running for ${userDataDir}. Use --isolated to run a separate browser instance.`,
+        {cause: error},
       );
     }
     throw error;
@@ -172,12 +203,28 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
 
 export async function ensureBrowserLaunched(
   options: McpLaunchOptions,
-): Promise<Browser> {
-  if (browser?.connected) {
-    return browser;
+): Promise<BrowserResult> {
+  if (browserResult) {
+    return browserResult;
   }
-  browser = await launch(options);
-  return browser;
+  browserResult = await launch(options);
+
+  // Clear cached result when browser is manually closed so we can relaunch.
+  const {browser, context} = browserResult;
+  if (browser) {
+    browser.on('disconnected', () => {
+      logger('Browser disconnected, clearing cached browser result');
+      browserResult = undefined;
+    });
+  } else {
+    // Persistent context mode (no browser object) — listen on context.
+    context.on('close', () => {
+      logger('Browser context closed, clearing cached browser result');
+      browserResult = undefined;
+    });
+  }
+
+  return browserResult;
 }
 
 export type Channel = 'stable' | 'canary' | 'beta' | 'dev';

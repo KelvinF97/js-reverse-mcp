@@ -2,65 +2,39 @@
 
 # Chrome DevTools MCP Tool Reference
 
-- **[Navigation automation](#navigation-automation)** (4 tools)
-  - [`list_pages`](#list_pages)
+- **[Navigation automation](#navigation-automation)** (3 tools)
   - [`navigate_page`](#navigate_page)
   - [`new_page`](#new_page)
   - [`select_page`](#select_page)
-- **[Network](#network)** (6 tools)
-  - [`analyze_websocket_messages`](#analyze_websocket_messages)
-  - [`get_network_request`](#get_network_request)
-  - [`get_websocket_message`](#get_websocket_message)
+- **[Network](#network)** (2 tools)
   - [`get_websocket_messages`](#get_websocket_messages)
   - [`list_network_requests`](#list_network_requests)
-  - [`list_websocket_connections`](#list_websocket_connections)
-- **[Debugging](#debugging)** (5 tools)
+- **[Debugging](#debugging)** (4 tools)
   - [`evaluate_script`](#evaluate_script)
-  - [`get_console_message`](#get_console_message)
   - [`list_console_messages`](#list_console_messages)
+  - [`select_frame`](#select_frame)
   - [`take_screenshot`](#take_screenshot)
-  - [`take_snapshot`](#take_snapshot)
-- **[JS Reverse Engineering](#js-reverse-engineering)** (26 tools)
+- **[JS Reverse Engineering](#js-reverse-engineering)** (14 tools)
   - [`break_on_xhr`](#break_on_xhr)
-  - [`evaluate_on_callframe`](#evaluate_on_callframe)
-  - [`find_in_script`](#find_in_script)
   - [`get_paused_info`](#get_paused_info)
   - [`get_request_initiator`](#get_request_initiator)
   - [`get_script_source`](#get_script_source)
-  - [`get_storage`](#get_storage)
-  - [`hook_function`](#hook_function)
-  - [`inspect_object`](#inspect_object)
+  - [`inject_before_load`](#inject_before_load)
   - [`list_breakpoints`](#list_breakpoints)
-  - [`list_hooks`](#list_hooks)
   - [`list_scripts`](#list_scripts)
-  - [`monitor_events`](#monitor_events)
-  - [`pause`](#pause)
+  - [`pause_or_resume`](#pause_or_resume)
   - [`remove_breakpoint`](#remove_breakpoint)
-  - [`remove_xhr_breakpoint`](#remove_xhr_breakpoint)
-  - [`resume`](#resume)
+  - [`save_script_source`](#save_script_source)
   - [`search_in_sources`](#search_in_sources)
-  - [`set_breakpoint`](#set_breakpoint)
   - [`set_breakpoint_on_text`](#set_breakpoint_on_text)
-  - [`step_into`](#step_into)
-  - [`step_out`](#step_out)
-  - [`step_over`](#step_over)
-  - [`stop_monitor`](#stop_monitor)
+  - [`step`](#step)
   - [`trace_function`](#trace_function)
-  - [`unhook_function`](#unhook_function)
 
 ## Navigation automation
 
-### `list_pages`
-
-**Description:** Get a list of pages open in the browser.
-
-**Parameters:** None
-
----
-
 ### `navigate_page`
 
-**Description:** Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.
+**Description:** Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds. After navigation, stale script IDs are cleared and fresh ones are captured automatically. All breakpoints (URL, XHR, DOM) are preserved across navigation.
 
 **Parameters:**
 
@@ -84,86 +58,47 @@
 
 ### `select_page`
 
-**Description:** Select a page as a context for future tool calls.
+**Description:** Lists all open pages in the browser. Pass pageIdx to select a page as context for future tool calls.
 
 **Parameters:**
 
-- **pageIdx** (number) **(required)**: The index of the page to select. Call [`list_pages`](#list_pages) to list pages.
+- **pageIdx** (number) _(optional)_: The index of the page to select. If omitted, lists all pages without changing selection.
 
 ---
 
 ## Network
 
-### `analyze_websocket_messages`
-
-**Description:** Analyzes WebSocket messages and groups them by pattern/fingerprint. Essential for understanding binary/protobuf message types in live streaming scenarios. Returns statistics and sample indices for each message type.
-
-**Parameters:**
-
-- **direction** (enum: "sent", "received") _(optional)_: Only analyze messages in this direction.
-- **wsid** (number) **(required)**: The wsid of the WebSocket connection to analyze.
-
----
-
-### `get_network_request`
-
-**Description:** Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.
-
-**Parameters:**
-
-- **reqid** (number) _(optional)_: The reqid of the network request. If omitted returns the currently selected request in the DevTools Network panel.
-
----
-
-### `get_websocket_message`
-
-**Description:** Gets a single WebSocket message by its frame index. Use [`get_websocket_messages`](#get_websocket_messages) or [`analyze_websocket_messages`](#analyze_websocket_messages) first to find the frame index.
-
-**Parameters:**
-
-- **frameIndex** (integer) **(required)**: The frame index (0-based) to retrieve.
-- **wsid** (number) **(required)**: The wsid of the WebSocket connection.
-
----
-
 ### `get_websocket_messages`
 
-**Description:** Gets messages for a WebSocket connection. IMPORTANT: For binary/protobuf messages (like live streaming), use [`analyze_websocket_messages`](#analyze_websocket_messages) FIRST to understand message types, then use groupId parameter to filter specific types. Default mode shows summary only.
+**Description:** Lists WebSocket connections or gets messages for a specific connection. Without wsid, lists all connections. With wsid, gets messages. Set analyze=true to group messages by pattern. Use groupId to filter by group. Use frameIndex to get a single message's full detail.
 
 **Parameters:**
 
+- **analyze** (boolean) _(optional)_: Set to true to analyze and group messages by pattern/fingerprint. Returns statistics and sample indices for each message type.
 - **direction** (enum: "sent", "received") _(optional)_: Filter by direction: "sent" or "received".
-- **groupId** (string) _(optional)_: Filter by group ID (A, B, C, ...). Get group IDs from [`analyze_websocket_messages`](#analyze_websocket_messages) first.
+- **frameIndex** (integer) _(optional)_: Get a single message by its frame index (0-based). Returns full detail for that message.
+- **groupId** (string) _(optional)_: Filter by group ID (A, B, C, ...). Run with analyze=true first to get group IDs.
+- **includePreservedConnections** (boolean) _(optional)_: Set to true to return the preserved connections over the last 3 navigations (only for listing connections without wsid).
 - **pageIdx** (integer) _(optional)_: Page number (0-based).
-- **pageSize** (integer) _(optional)_: Messages per page. Defaults to 10.
+- **pageSize** (integer) _(optional)_: Messages per page (for messages mode) or connections per page (for list mode). Defaults to 10.
 - **show_content** (boolean) _(optional)_: Set to true to show full message payload. Default false (summary only) to avoid large binary output.
-- **wsid** (number) **(required)**: The wsid of the WebSocket connection.
+- **urlFilter** (string) _(optional)_: Filter connections by URL (only for listing connections without wsid).
+- **wsid** (number) _(optional)_: The wsid of the WebSocket connection. If omitted, lists all connections.
 
 ---
 
 ### `list_network_requests`
 
-**Description:** List all requests for the currently selected page since the last navigation.
+**Description:** List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Pass reqid to get a single request's full details.
 
 **Parameters:**
 
 - **includePreservedRequests** (boolean) _(optional)_: Set to true to return the preserved requests over the last 3 navigations.
 - **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
-- **pageSize** (integer) _(optional)_: Maximum number of requests to return. When omitted, returns all requests.
+- **pageSize** (integer) _(optional)_: Maximum number of requests to return. Defaults to 20.
+- **reqid** (number) _(optional)_: The reqid of a specific network request to get full details for. If omitted, lists all requests.
 - **resourceTypes** (array) _(optional)_: Filter requests to only return requests of the specified resource types. When omitted or empty, returns all requests.
-
----
-
-### `list_websocket_connections`
-
-**Description:** List all WebSocket connections. After getting wsid, use [`analyze_websocket_messages`](#analyze_websocket_messages)(wsid) FIRST to understand message patterns before viewing individual messages.
-
-**Parameters:**
-
-- **includePreservedConnections** (boolean) _(optional)_: Set to true to return the preserved connections over the last 3 navigations.
-- **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
-- **pageSize** (integer) _(optional)_: Maximum number of connections to return. When omitted, returns all connections.
-- **urlFilter** (string) _(optional)_: Filter connections by URL. Only connections containing this substring will be returned.
+- **urlFilter** (string) _(optional)_: Filter requests by URL. Only requests containing this substring will be returned.
 
 ---
 
@@ -172,11 +107,11 @@
 ### `evaluate_script`
 
 **Description:** Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON
-so returned values have to JSON-serializable.
+so returned values have to JSON-serializable. When execution is paused at a breakpoint, automatically evaluates in the paused call frame context.
 
 **Parameters:**
 
-- **args** (array) _(optional)_: An optional list of arguments to pass to the function.
+- **frameIndex** (integer) _(optional)_: When paused at a breakpoint, which call frame to evaluate in (0 = top frame). If omitted, uses the top frame. Use [`get_paused_info`](#get_paused_info) to see available frames.
 - **function** (string) **(required)**: A JavaScript function declaration to be executed by the tool in the currently selected page.
   Example without arguments: `() => {
   return document.title
@@ -187,28 +122,31 @@ so returned values have to JSON-serializable.
   return el.innerText;
 }`
 
----
-
-### `get_console_message`
-
-**Description:** Gets a console message by its ID. You can get all messages by calling [`list_console_messages`](#list_console_messages).
-
-**Parameters:**
-
-- **msgid** (number) **(required)**: The msgid of a console message on the page from the listed console messages
+- **mainWorld** (boolean) _(optional)_: Execute the function in the page main world instead of the default isolated context. Use this when you need to access page-defined globals (e.g. window.bdms, window.app). The function must be synchronous and return a JSON-serializable value.
 
 ---
 
 ### `list_console_messages`
 
-**Description:** List all console messages for the currently selected page since the last navigation.
+**Description:** List all console messages for the currently selected page since the last navigation. Pass msgid to get a single message by its ID.
 
 **Parameters:**
 
 - **includePreservedMessages** (boolean) _(optional)_: Set to true to return the preserved messages over the last 3 navigations.
+- **msgid** (number) _(optional)_: The msgid of a console message on the page from the listed console messages
 - **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
 - **pageSize** (integer) _(optional)_: Maximum number of messages to return. When omitted, returns all requests.
 - **types** (array) _(optional)_: Filter messages to only return messages of the specified resource types. When omitted or empty, returns all messages.
+
+---
+
+### `select_frame`
+
+**Description:** Lists all frames (including iframes) in the current page. Pass frameIdx to switch execution context to that frame for [`evaluate_script`](#evaluate_script) and other tools.
+
+**Parameters:**
+
+- **frameIdx** (integer) _(optional)_: The frame index to select. 0 = main frame. If omitted, lists all frames without changing selection.
 
 ---
 
@@ -219,23 +157,9 @@ so returned values have to JSON-serializable.
 **Parameters:**
 
 - **filePath** (string) _(optional)_: The absolute path, or a path relative to the current working directory, to save the screenshot to instead of attaching it to the response.
-- **format** (enum: "png", "jpeg", "webp") _(optional)_: Type of format to save the screenshot as. Default is "png"
+- **format** (enum: "png", "jpeg") _(optional)_: Type of format to save the screenshot as. Default is "png"
 - **fullPage** (boolean) _(optional)_: If set to true takes a screenshot of the full page instead of the currently visible viewport. Incompatible with uid.
-- **quality** (number) _(optional)_: Compression quality for JPEG and WebP formats (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.
-- **uid** (string) _(optional)_: The uid of an element on the page from the page content snapshot. If omitted takes a pages screenshot.
-
----
-
-### `take_snapshot`
-
-**Description:** Take a text snapshot of the currently selected page based on the a11y tree. The snapshot lists page elements along with a unique
-identifier (uid). Always use the latest snapshot. Prefer taking a snapshot over taking a screenshot. The snapshot indicates the element selected
-in the DevTools Elements panel (if any).
-
-**Parameters:**
-
-- **filePath** (string) _(optional)_: The absolute path, or a path relative to the current working directory, to save the snapshot to instead of attaching it to the response.
-- **verbose** (boolean) _(optional)_: Whether to include all possible information available in the full a11y tree. Default is false.
+- **quality** (number) _(optional)_: Compression quality for JPEG format (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.
 
 ---
 
@@ -251,39 +175,15 @@ in the DevTools Elements panel (if any).
 
 ---
 
-### `evaluate_on_callframe`
-
-**Description:** Evaluates a JavaScript expression in the context of a specific call frame while paused. This allows you to inspect variables and execute code in the paused scope.
-
-**Parameters:**
-
-- **expression** (string) **(required)**: The JavaScript expression to evaluate.
-- **frameIndex** (integer) _(optional)_: The call frame index to evaluate in (0 = top frame, default: 0).
-
----
-
-### `find_in_script`
-
-**Description:** Finds a string in a specific script and returns its exact line/column position with surrounding context. Ideal for setting breakpoints in minified files where the entire code is on one line.
-
-**Parameters:**
-
-- **caseSensitive** (boolean) _(optional)_: Whether the search is case-sensitive (default: true).
-- **contextChars** (integer) _(optional)_: Number of characters to show before and after the match (default: 100).
-- **occurrence** (integer) _(optional)_: Which occurrence to find (1 = first, 2 = second, etc.).
-- **query** (string) **(required)**: The string to find in the script.
-- **scriptId** (string) **(required)**: The script ID to search in (from [`list_scripts`](#list_scripts)).
-
----
-
 ### `get_paused_info`
 
 **Description:** Gets information about the current paused state including call stack, current location, and scope variables. Use this after a breakpoint is hit to understand the execution context.
 
 **Parameters:**
 
+- **frameIndex** (integer) _(optional)_: Which call frame to inspect scope variables for (0 = top frame). Use the call stack indices to pick a frame.
 - **includeScopes** (boolean) _(optional)_: Whether to include scope variables (default: true).
-- **maxScopeDepth** (integer) _(optional)_: Maximum scope depth to traverse (default: 2).
+- **maxScopeDepth** (integer) _(optional)_: Maximum scope depth to traverse (default: 2). 1 = local scope only (function args &amp; local vars), 2 = local + closure scopes, 3+ = all non-global scopes.
 
 ---
 
@@ -299,67 +199,33 @@ in the DevTools Elements panel (if any).
 
 ### `get_script_source`
 
-**Description:** Gets the source code of a JavaScript script by its script ID. Supports line range (for normal files) or character offset (for minified single-line files). Use [`list_scripts`](#list_scripts) first to find the script ID.
+**Description:** Gets a small snippet of a JavaScript script source by URL (recommended) or script ID. Supports line range (for normal files) or character offset (for minified single-line files). Prefer using url over scriptId — URLs remain stable across page navigations while script IDs become invalid after reload. IMPORTANT: This tool is designed for reading small code regions (e.g. around breakpoints or search results). You MUST always specify startLine/endLine or offset/length. To read an entire script file, use curl to download it by its URL instead.
 
 **Parameters:**
 
 - **endLine** (integer) _(optional)_: End line number (1-based). Use for multi-line files.
 - **length** (integer) _(optional)_: Number of characters to return when using offset (default: 1000).
 - **offset** (integer) _(optional)_: Character offset to start from (0-based). Use for minified single-line files.
-- **scriptId** (string) **(required)**: The script ID (from [`list_scripts`](#list_scripts)) to get the source code for.
+- **scriptId** (string) _(optional)_: Script ID (from [`list_scripts`](#list_scripts)). Becomes invalid after page navigation — prefer url instead.
 - **startLine** (integer) _(optional)_: Start line number (1-based). Use for multi-line files.
+- **url** (string) _(optional)_: Script URL (preferred). Stable across page navigations. Exact match first, then substring match.
 
 ---
 
-### `get_storage`
+### `inject_before_load`
 
-**Description:** Gets browser storage data including cookies, localStorage, and sessionStorage.
-
-**Parameters:**
-
-- **filter** (string) _(optional)_: Optional filter string to match against keys/names.
-- **type** (enum: "all", "cookies", "localStorage", "sessionStorage") _(optional)_: Which storage to retrieve (default: all).
-
----
-
-### `hook_function`
-
-**Description:** Hooks a JavaScript function to log its calls, arguments, and return values. Useful for understanding how functions are used without setting breakpoints.
+**Description:** Injects a JavaScript script that runs before any page script on every page load. Pass script to inject, or pass identifier to remove a previously injected script.
 
 **Parameters:**
 
-- **hookId** (string) _(optional)_: Custom identifier for this hook. Used to unhook later. Defaults to target name.
-- **logArgs** (boolean) _(optional)_: Whether to log function arguments (default: true).
-- **logResult** (boolean) _(optional)_: Whether to log return value (default: true).
-- **logStack** (boolean) _(optional)_: Whether to log call stack (default: false).
-- **target** (string) **(required)**: The function to hook. Can be: global function name ("fetch"), object method ("XMLHttpRequest.prototype.open"), or path ("window.app.api.request").
-
----
-
-### `inspect_object`
-
-**Description:** Deeply inspects a JavaScript object, showing its properties, prototype chain, and methods. Useful for understanding object structure.
-
-**Parameters:**
-
-- **depth** (integer) _(optional)_: How deep to inspect nested objects (default: 2).
-- **expression** (string) **(required)**: JavaScript expression to evaluate and inspect (e.g., "window.app", "document.body", "myObject").
-- **showMethods** (boolean) _(optional)_: Whether to show methods (default: true).
-- **showPrototype** (boolean) _(optional)_: Whether to show prototype chain (default: true).
+- **identifier** (string) _(optional)_: The identifier of a previously injected script to remove.
+- **script** (string) _(optional)_: JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this.\_h5sign = v; }, get() { return this.\_h5sign; } })
 
 ---
 
 ### `list_breakpoints`
 
-**Description:** Lists all active breakpoints in the current debugging session.
-
-**Parameters:** None
-
----
-
-### `list_hooks`
-
-**Description:** Lists all active function hooks.
+**Description:** Lists all active breakpoints in the current debugging session. Breakpoints persist across page navigations and are automatically restored after reload/goto/back/forward.
 
 **Parameters:** None
 
@@ -367,7 +233,7 @@ in the DevTools Elements panel (if any).
 
 ### `list_scripts`
 
-**Description:** Lists all JavaScript scripts loaded in the current page. Returns script ID, URL, and source map information. Use this to find scripts before setting breakpoints or searching.
+**Description:** Lists all JavaScript scripts loaded in the current page. Returns script ID, URL, and source map information. Use this to find scripts before setting breakpoints or searching. Script IDs are automatically refreshed after page navigation, so listed IDs are always valid.
 
 **Parameters:**
 
@@ -375,21 +241,9 @@ in the DevTools Elements panel (if any).
 
 ---
 
-### `monitor_events`
+### `pause_or_resume`
 
-**Description:** Monitors DOM events on a specified element or window. Events will be logged to console.
-
-**Parameters:**
-
-- **events** (array) _(optional)_: Specific events to monitor (e.g., ["click", "keydown"]). If not specified, monitors common events.
-- **monitorId** (string) _(optional)_: Custom ID for this monitor. Used to stop monitoring later.
-- **selector** (string) _(optional)_: CSS selector for element to monitor, or "window"/"document" (default: window).
-
----
-
-### `pause`
-
-**Description:** Pauses JavaScript execution at the current point. Use this to interrupt running code.
+**Description:** Toggles JavaScript execution. If paused, resumes execution. If running, pauses execution.
 
 **Parameters:** None
 
@@ -397,29 +251,24 @@ in the DevTools Elements panel (if any).
 
 ### `remove_breakpoint`
 
-**Description:** Removes a breakpoint by its ID. Use [`list_breakpoints`](#list_breakpoints) to see active breakpoints.
+**Description:** Removes breakpoints and automatically resumes execution if paused. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR).
 
 **Parameters:**
 
-- **breakpointId** (string) **(required)**: The breakpoint ID to remove (from [`list_breakpoints`](#list_breakpoints) or [`set_breakpoint`](#set_breakpoint)).
+- **breakpointId** (string) _(optional)_: The breakpoint ID to remove (from [`list_breakpoints`](#list_breakpoints) or [`set_breakpoint_on_text`](#set_breakpoint_on_text)).
+- **url** (string) _(optional)_: The XHR breakpoint URL pattern to remove.
 
 ---
 
-### `remove_xhr_breakpoint`
+### `save_script_source`
 
-**Description:** Removes an XHR/Fetch breakpoint.
+**Description:** Saves the full source code of a JavaScript script to a local file. Use this to download complete script sources for offline analysis, especially for large or minified files that are too big to view inline with [`get_script_source`](#get_script_source).
 
 **Parameters:**
 
-- **url** (string) **(required)**: The URL pattern to remove breakpoint for.
-
----
-
-### `resume`
-
-**Description:** Resumes JavaScript execution after being paused at a breakpoint. Execution continues until the next breakpoint or completion.
-
-**Parameters:** None
+- **filePath** (string) **(required)**: Local file path to save the script source to.
+- **scriptId** (string) _(optional)_: Script ID (from [`list_scripts`](#list_scripts)). Becomes invalid after page navigation — prefer url instead.
+- **url** (string) _(optional)_: Script URL (preferred). Stable across page navigations. Exact match first, then substring match.
 
 ---
 
@@ -432,30 +281,16 @@ in the DevTools Elements panel (if any).
 - **caseSensitive** (boolean) _(optional)_: Whether the search should be case-sensitive.
 - **excludeMinified** (boolean) _(optional)_: Skip minified files (files with very long lines). Default: true.
 - **isRegex** (boolean) _(optional)_: Whether to treat the query as a regular expression.
-- **maxLineLength** (integer) _(optional)_: Maximum characters per line preview (default: 150). Set to 0 for full lines.
+- **maxLineLength** (integer) _(optional)_: Maximum characters per matched line preview (default: 150). Increase if you need more context around the match.
 - **maxResults** (integer) _(optional)_: Maximum number of results to return (default: 30).
 - **query** (string) **(required)**: The search query (string or regex pattern).
 - **urlFilter** (string) _(optional)_: Only search scripts whose URL contains this string (case-insensitive).
 
 ---
 
-### `set_breakpoint`
-
-**Description:** Sets a breakpoint in a JavaScript file at the specified line. The breakpoint will trigger when the code executes.
-
-**Parameters:**
-
-- **columnNumber** (integer) _(optional)_: Optional column number (0-based).
-- **condition** (string) _(optional)_: Optional condition expression. The breakpoint only triggers when this evaluates to true.
-- **isRegex** (boolean) _(optional)_: Whether to treat the URL as a regex pattern.
-- **lineNumber** (integer) **(required)**: The line number to set the breakpoint (1-based).
-- **url** (string) **(required)**: The URL of the JavaScript file (can be a partial match or regex pattern).
-
----
-
 ### `set_breakpoint_on_text`
 
-**Description:** Sets a breakpoint on specific code (function name, statement, etc.) by searching for it and automatically determining the exact position. Works with both normal and minified files.
+**Description:** Sets a breakpoint on specific code (function name, statement, etc.) by searching for it and automatically determining the exact position. Works with both normal and minified files. Breakpoints persist across page navigations.
 
 **Parameters:**
 
@@ -466,61 +301,27 @@ in the DevTools Elements panel (if any).
 
 ---
 
-### `step_into`
+### `step`
 
-**Description:** Steps into the next function call. Use this to enter and debug function bodies.
-
-**Parameters:** None
-
----
-
-### `step_out`
-
-**Description:** Steps out of the current function, continuing until the function returns. Use this to quickly exit a function.
-
-**Parameters:** None
-
----
-
-### `step_over`
-
-**Description:** Steps over to the next statement, treating function calls as a single step. Use this to move through code without entering function bodies.
-
-**Parameters:** None
-
----
-
-### `stop_monitor`
-
-**Description:** Stops an event monitor.
+**Description:** Steps JavaScript execution. Use direction "over" to skip function calls, "into" to enter function bodies, "out" to exit the current function. Returns the new location with source context.
 
 **Parameters:**
 
-- **monitorId** (string) **(required)**: The monitor ID to stop.
+- **direction** (enum: "over", "into", "out") **(required)**: [`Step`](#step) direction: "over" (next statement), "into" (enter function), "out" (exit function).
 
 ---
 
 ### `trace_function`
 
-**Description:** Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution.
+**Description:** Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution. Trace breakpoints persist across page navigations.
 
 **Parameters:**
 
 - **functionName** (string) **(required)**: The function name to trace. Will search for "function NAME" or "NAME = function" or "NAME(" patterns.
 - **logArgs** (boolean) _(optional)_: Whether to log function arguments (default: true).
 - **logThis** (boolean) _(optional)_: Whether to log "this" context (default: false).
-- **pause** (boolean) _(optional)_: Whether to actually [`pause`](#pause) execution (default: false, just logs).
+- **pause** (boolean) _(optional)_: Whether to actually pause execution (default: false, just logs).
 - **traceId** (string) _(optional)_: Custom ID for this trace. Used to identify in logs.
 - **urlFilter** (string) _(optional)_: Only search in scripts matching this URL pattern.
-
----
-
-### `unhook_function`
-
-**Description:** Removes a previously installed function hook.
-
-**Parameters:**
-
-- **hookId** (string) **(required)**: The hook ID to remove (from [`hook_function`](#hook_function)).
 
 ---

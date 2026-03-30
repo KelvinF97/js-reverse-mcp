@@ -12,40 +12,38 @@ import {CLOSE_PAGE_ERROR, defineTool, timeoutSchema} from './ToolDefinition.js';
 // Default navigation timeout in milliseconds (10 seconds)
 const DEFAULT_NAV_TIMEOUT = 10000;
 
-export const listPages = defineTool({
-  name: 'list_pages',
-  description: `Get a list of pages open in the browser.`,
-  annotations: {
-    category: ToolCategory.NAVIGATION,
-    readOnlyHint: true,
-  },
-  schema: {},
-  handler: async (_request, response) => {
-    response.setIncludePages(true);
-  },
-});
-
 export const selectPage = defineTool({
   name: 'select_page',
-  description: `Select a page as a context for future tool calls.`,
+  description: `Lists all open pages in the browser. Pass pageIdx to select a page as context for future tool calls.`,
   annotations: {
     category: ToolCategory.NAVIGATION,
-    readOnlyHint: true,
+    readOnlyHint: false,
   },
   schema: {
     pageIdx: zod
       .number()
+      .optional()
       .describe(
-        'The index of the page to select. Call list_pages to list pages.',
+        'The index of the page to select. If omitted, lists all pages without changing selection.',
       ),
   },
   handler: async (request, response, context) => {
+    if (request.params.pageIdx === undefined) {
+      // List mode
+      response.setIncludePages(true);
+      return;
+    }
+
+    // Select mode
     const page = context.getPageByIdx(request.params.pageIdx);
     await page.bringToFront();
     context.selectPage(page);
     response.setIncludePages(true);
   },
 });
+
+// Default referer for anti-detection (matches Scrapling's google_search=True behavior)
+const DEFAULT_REFERER = 'https://www.google.com/';
 
 export const newPage = defineTool({
   name: 'new_page',
@@ -61,11 +59,13 @@ export const newPage = defineTool({
   handler: async (request, response, context) => {
     const page = await context.newPage();
 
-    await context.waitForEventsAfterAction(async () => {
-      await page.goto(request.params.url, {
-        timeout: request.params.timeout ?? DEFAULT_NAV_TIMEOUT,
-        waitUntil: 'domcontentloaded',
-      });
+    // Use plain goto without waitForEventsAfterAction to avoid creating
+    // a CDP session during navigation. Anti-bot systems detect the extra
+    // CDP session that WaitForHelper creates (Page.frameStartedNavigating listener).
+    await page.goto(request.params.url, {
+      timeout: request.params.timeout ?? DEFAULT_NAV_TIMEOUT,
+      waitUntil: 'domcontentloaded',
+      referer: DEFAULT_REFERER,
     });
 
     response.setIncludePages(true);
@@ -74,7 +74,8 @@ export const newPage = defineTool({
 
 export const closePage = defineTool({
   name: 'close_page',
-  description: `Closes a page by its index. The last open page cannot be closed.`,
+  description:
+    'Closes a page by its index. The last open page cannot be closed. Use select_page without pageIdx to list open pages first.',
   annotations: {
     category: ToolCategory.NAVIGATION,
     readOnlyHint: false,
@@ -83,26 +84,27 @@ export const closePage = defineTool({
     pageIdx: zod
       .number()
       .describe(
-        'The index of the page to close. Call list_pages to list pages.',
+        'The index of the page to close. Call select_page without pageIdx to list pages.',
       ),
   },
   handler: async (request, response, context) => {
     try {
       await context.closePage(request.params.pageIdx);
     } catch (err) {
-      if (err.message === CLOSE_PAGE_ERROR) {
+      if (err instanceof Error && err.message === CLOSE_PAGE_ERROR) {
         response.appendResponseLine(err.message);
       } else {
         throw err;
       }
     }
+
     response.setIncludePages(true);
   },
 });
 
 export const navigatePage = defineTool({
   name: 'navigate_page',
-  description: `Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds. Use initScript to inject JavaScript before page scripts run (useful for anti-debugging bypass).`,
+  description: `Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds. After navigation, stale script IDs are cleared and fresh ones are captured automatically. All breakpoints (URL, XHR, DOM) are preserved across navigation.`,
   annotations: {
     category: ToolCategory.NAVIGATION,
     readOnlyHint: false,
@@ -119,15 +121,6 @@ export const navigatePage = defineTool({
       .boolean()
       .optional()
       .describe('Whether to ignore cache on reload.'),
-    initScript: zod
-      .string()
-      .optional()
-      .describe(
-        'JavaScript to execute on each new document BEFORE any page scripts run. ' +
-          'Useful for anti-debugging bypass (e.g., override debugger statement), ' +
-          'hook native functions before they are called, or modify navigator.webdriver. ' +
-          'The script is automatically removed after navigation completes.',
-      ),
     ...timeoutSchema,
   },
   handler: async (request, response, context) => {
@@ -144,91 +137,147 @@ export const navigatePage = defineTool({
       request.params.type = 'url';
     }
 
-    let initScriptId: string | undefined;
-    if (request.params.initScript) {
-      const {identifier} = await page.evaluateOnNewDocument(
-        request.params.initScript,
-      );
-      initScriptId = identifier;
-    }
-
-    try {
-      await context.waitForEventsAfterAction(async () => {
-        switch (request.params.type) {
-          case 'url':
-            if (!request.params.url) {
-              throw new Error('A URL is required for navigation of type=url.');
-            }
-            try {
-              await page.goto(request.params.url, {
-                ...options,
-                waitUntil: 'domcontentloaded',
-              });
-              response.appendResponseLine(
-                `Successfully navigated to ${request.params.url}.`,
-              );
-            } catch (error) {
-              response.appendResponseLine(
-                `Unable to navigate in the selected page: ${error.message}.`,
-              );
-            }
-            break;
-          case 'back':
-            try {
-              await page.goBack({
-                ...options,
-                waitUntil: 'domcontentloaded',
-              });
-              response.appendResponseLine(
-                `Successfully navigated back to ${page.url()}.`,
-              );
-            } catch (error) {
-              response.appendResponseLine(
-                `Unable to navigate back in the selected page: ${error.message}.`,
-              );
-            }
-            break;
-          case 'forward':
-            try {
-              await page.goForward({
-                ...options,
-                waitUntil: 'domcontentloaded',
-              });
-              response.appendResponseLine(
-                `Successfully navigated forward to ${page.url()}.`,
-              );
-            } catch (error) {
-              response.appendResponseLine(
-                `Unable to navigate forward in the selected page: ${error.message}.`,
-              );
-            }
-            break;
-          case 'reload':
-            try {
-              await page.reload({
-                ...options,
-                waitUntil: 'domcontentloaded',
-                ignoreCache: request.params.ignoreCache,
-              });
-              response.appendResponseLine(`Successfully reloaded the page.`);
-            } catch (error) {
-              response.appendResponseLine(
-                `Unable to reload the selected page: ${error.message}.`,
-              );
-            }
-            break;
-        }
-      });
-    } finally {
-      if (initScriptId) {
-        await page
-          .removeScriptToEvaluateOnNewDocument(initScriptId)
-          .catch(() => {});
+    // Auto-resume if execution is paused at a breakpoint before navigating,
+    // otherwise the navigation will hang waiting for the paused script.
+    const debugger_ = context.debuggerContext;
+    if (debugger_.isEnabled() && debugger_.isPaused()) {
+      try {
+        await debugger_.resume();
+      } catch {
+        // Ignore resume errors
       }
     }
 
-    if (initScriptId) {
-      response.appendResponseLine('initScript was injected before page load.');
+    // Clear stale script IDs BEFORE navigation. The scriptParsed listener
+    // remains active and will capture new scripts as the page loads.
+    // We intentionally do NOT call reinitDebugger() here — that would send
+    // Debugger.disable which wipes ALL breakpoints (URL, XHR, DOM) and
+    // implicitly resumes paused state. clearScripts() only clears cached
+    // script IDs without touching the debugger or breakpoints.
+    //
+    // Note: Debugger.setBreakpointByUrl breakpoints survive navigation, but
+    // DOMDebugger XHR breakpoints are reset by Chrome on navigation — we
+    // restore them after navigation completes.
+    if (debugger_.isEnabled()) {
+      debugger_.clearScripts();
+    }
+
+    // Use plain navigation without waitForEventsAfterAction to avoid creating
+    // a CDP session during navigation. Anti-bot systems detect the extra
+    // CDP session that WaitForHelper creates (Page.frameStartedNavigating listener).
+    switch (request.params.type) {
+      case 'url':
+        if (!request.params.url) {
+          throw new Error('A URL is required for navigation of type=url.');
+        }
+        try {
+          await page.goto(request.params.url, {
+            ...options,
+            waitUntil: 'domcontentloaded',
+            referer: DEFAULT_REFERER,
+          });
+          response.appendResponseLine(
+            `Successfully navigated to ${request.params.url}.`,
+          );
+          response.appendResponseLine(
+            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+          );
+        } catch (error) {
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Navigation to ${request.params.url} started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to navigate in the selected page: ${error.message}.`,
+            );
+          }
+        }
+        break;
+      case 'back':
+        try {
+          await page.goBack({
+            ...options,
+            waitUntil: 'domcontentloaded',
+          });
+          response.appendResponseLine(
+            `Successfully navigated back to ${page.url()}.`,
+          );
+          response.appendResponseLine(
+            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+          );
+        } catch (error) {
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Navigation back started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to navigate back in the selected page: ${error.message}.`,
+            );
+          }
+        }
+        break;
+      case 'forward':
+        try {
+          await page.goForward({
+            ...options,
+            waitUntil: 'domcontentloaded',
+          });
+          response.appendResponseLine(
+            `Successfully navigated forward to ${page.url()}.`,
+          );
+          response.appendResponseLine(
+            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+          );
+        } catch (error) {
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Navigation forward started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to navigate forward in the selected page: ${error.message}.`,
+            );
+          }
+        }
+        break;
+      case 'reload':
+        try {
+          // For ignoreCache, use CDP Page.reload directly
+          if (request.params.ignoreCache) {
+            const session = await context.getSelectedPage().context().newCDPSession(page);
+            await session.send('Page.reload', {ignoreCache: true});
+            await page.waitForLoadState('domcontentloaded', {timeout: options.timeout});
+            await session.detach();
+          } else {
+            await page.reload({
+              ...options,
+              waitUntil: 'domcontentloaded',
+            });
+          }
+          response.appendResponseLine(`Successfully reloaded the page.`);
+          response.appendResponseLine(
+            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+          );
+        } catch (error) {
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Page reload started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to reload the selected page: ${error.message}.`,
+            );
+          }
+        }
+        break;
+    }
+
+    // Restore XHR breakpoints after navigation — Chrome resets
+    // DOMDebugger state on page navigation.
+    if (debugger_.isEnabled()) {
+      await debugger_.restoreXHRBreakpoints();
     }
 
     response.setIncludePages(true);

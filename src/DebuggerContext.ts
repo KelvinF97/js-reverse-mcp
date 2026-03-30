@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {CDPSession, Protocol} from './third_party/index.js';
+// Use devtools-protocol types for data structures.
+// The CDPSession is typed as 'any' in this class to bridge
+// devtools-protocol and patchright Protocol type incompatibilities.
+import type {Protocol} from 'devtools-protocol';
 
 export interface ScriptInfo {
   scriptId: string;
@@ -23,6 +26,7 @@ export interface BreakpointInfo {
   lineNumber: number;
   columnNumber: number;
   condition?: string;
+  isRegex?: boolean;
   locations: Array<{
     scriptId: string;
     lineNumber: number;
@@ -118,17 +122,21 @@ export interface EvaluateResult {
  * It tracks loaded scripts, manages breakpoints, and provides search functionality.
  */
 export class DebuggerContext {
-  #client: CDPSession | null = null;
+  // Use 'any' to bridge devtools-protocol and patchright Protocol type incompatibilities
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  #client: any = null;
   #scripts = new Map<string, ScriptInfo>(); // scriptId -> info
   #urlToScripts = new Map<string, string[]>(); // url -> scriptId[]
   #breakpoints = new Map<string, BreakpointInfo>(); // breakpointId -> info
+  #xhrBreakpoints = new Set<string>(); // tracked XHR breakpoint URL patterns
   #enabled = false;
   #pausedState: PausedState = {isPaused: false, callFrames: []};
 
   /**
    * Enable the debugger and start tracking scripts.
    */
-  async enable(client: CDPSession): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async enable(client: any): Promise<void> {
     if (this.#enabled && this.#client === client) {
       return;
     }
@@ -193,7 +201,8 @@ export class DebuggerContext {
   /**
    * Get the CDP client.
    */
-  getClient(): CDPSession | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getClient(): any {
     return this.#client;
   }
 
@@ -320,42 +329,90 @@ export class DebuggerContext {
   }
 
   /**
-   * Step over the next statement.
+   * Wait for the next Debugger.paused event after a step command.
+   * Returns the top call frame from the new paused state.
    */
-  async stepOver(): Promise<void> {
+  #waitForPaused(timeoutMs = 10000): Promise<CallFrame> {
+    return new Promise<CallFrame>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#client?.off('Debugger.paused', onPaused);
+        reject(new Error('Timed out waiting for debugger to pause after step'));
+      }, timeoutMs);
+
+      const onPaused = (event: Protocol.Debugger.PausedEvent): void => {
+        clearTimeout(timer);
+        this.#client?.off('Debugger.paused', onPaused);
+        // The #onPaused handler will also fire and update #pausedState.
+        // We resolve with the top frame from the event directly.
+        const topFrame = event.callFrames[0];
+        if (topFrame) {
+          resolve({
+            callFrameId: topFrame.callFrameId,
+            functionName: topFrame.functionName || '<anonymous>',
+            location: {
+              scriptId: topFrame.location.scriptId,
+              lineNumber: topFrame.location.lineNumber,
+              columnNumber: topFrame.location.columnNumber ?? 0,
+            },
+            url: topFrame.url || '',
+            scopeChain: [],
+            this: {type: topFrame.this.type},
+          });
+        } else {
+          reject(new Error('Paused with no call frames'));
+        }
+      };
+
+      this.#client.on('Debugger.paused', onPaused);
+    });
+  }
+
+  /**
+   * Step over the next statement.
+   * Returns the top call frame after pausing.
+   */
+  async stepOver(): Promise<CallFrame> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
     if (!this.#pausedState.isPaused) {
       throw new Error('Execution is not paused');
     }
+    const pausedPromise = this.#waitForPaused();
     await this.#client.send('Debugger.stepOver');
+    return pausedPromise;
   }
 
   /**
    * Step into the next function call.
+   * Returns the top call frame after pausing.
    */
-  async stepInto(): Promise<void> {
+  async stepInto(): Promise<CallFrame> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
     if (!this.#pausedState.isPaused) {
       throw new Error('Execution is not paused');
     }
+    const pausedPromise = this.#waitForPaused();
     await this.#client.send('Debugger.stepInto');
+    return pausedPromise;
   }
 
   /**
    * Step out of the current function.
+   * Returns the top call frame after pausing.
    */
-  async stepOut(): Promise<void> {
+  async stepOut(): Promise<CallFrame> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
     if (!this.#pausedState.isPaused) {
       throw new Error('Execution is not paused');
     }
+    const pausedPromise = this.#waitForPaused();
     await this.#client.send('Debugger.stepOut');
+    return pausedPromise;
   }
 
   /**
@@ -489,6 +546,37 @@ export class DebuggerContext {
   }
 
   /**
+   * Get the source code of a script by URL.
+   * Resolves URL to the most recent scriptId and returns both source and script info.
+   */
+  async getScriptSourceByUrl(
+    url: string,
+  ): Promise<{source: string; script: ScriptInfo}> {
+    if (!this.#client) {
+      throw new Error('Debugger not enabled');
+    }
+
+    // Try exact match first
+    let scripts = this.getScriptsByUrl(url);
+
+    // Fall back to substring match
+    if (scripts.length === 0) {
+      scripts = this.getScriptsByUrlPattern(url);
+    }
+
+    if (scripts.length === 0) {
+      throw new Error(
+        `No script found matching URL "${url}". Use list_scripts to see available scripts.`,
+      );
+    }
+
+    // Pick the last script (most recent parse)
+    const script = scripts[scripts.length - 1];
+    const source = await this.getScriptSource(script.scriptId);
+    return {source, script};
+  }
+
+  /**
    * Get the source code of a script.
    */
   async getScriptSource(scriptId: string): Promise<string> {
@@ -552,6 +640,118 @@ export class DebuggerContext {
     return {query, matches};
   }
 
+  /**
+   * Clear cached scripts without disabling the debugger.
+   * Use during same-page navigation where the CDP session stays
+   * the same but old script IDs become invalid.
+   */
+  clearScripts(): void {
+    this.#scripts.clear();
+    this.#urlToScripts.clear();
+  }
+
+  /**
+   * Re-set all breakpoints from the stored definitions via CDP.
+   * Called after debugger re-enable to restore breakpoints that
+   * were wiped by Debugger.disable.
+   */
+  async restoreBreakpoints(
+    breakpoints: BreakpointInfo[],
+  ): Promise<void> {
+    if (!this.#client) {
+      return;
+    }
+
+    for (const bp of breakpoints) {
+      try {
+        const params: Record<string, unknown> = {
+          lineNumber: bp.lineNumber,
+          columnNumber: bp.columnNumber,
+        };
+        if (bp.isRegex) {
+          params.urlRegex = bp.url;
+        } else {
+          params.url = bp.url;
+        }
+        if (bp.condition) {
+          params.condition = bp.condition;
+        }
+
+        const result = await this.#client.send(
+          'Debugger.setBreakpointByUrl',
+          params,
+        );
+
+        const restoredInfo: BreakpointInfo = {
+          breakpointId: result.breakpointId,
+          url: bp.url,
+          lineNumber: bp.lineNumber,
+          columnNumber: bp.columnNumber,
+          condition: bp.condition,
+          isRegex: bp.isRegex,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          locations: result.locations.map((loc: any) => ({
+            scriptId: loc.scriptId,
+            lineNumber: loc.lineNumber,
+            columnNumber: loc.columnNumber ?? 0,
+          })),
+        };
+
+        this.#breakpoints.set(result.breakpointId, restoredInfo);
+      } catch {
+        // Skip breakpoints that fail to restore
+      }
+    }
+  }
+
+  // ==================== XHR Breakpoint Management ====================
+
+  /**
+   * Set an XHR/Fetch breakpoint and track it for restoration after navigation.
+   */
+  async setXHRBreakpoint(url: string): Promise<void> {
+    if (!this.#client) {
+      throw new Error('Debugger not enabled');
+    }
+    await this.#client.send('DOMDebugger.setXHRBreakpoint', {url});
+    this.#xhrBreakpoints.add(url);
+  }
+
+  /**
+   * Remove an XHR/Fetch breakpoint.
+   */
+  async removeXHRBreakpoint(url: string): Promise<void> {
+    if (!this.#client) {
+      throw new Error('Debugger not enabled');
+    }
+    await this.#client.send('DOMDebugger.removeXHRBreakpoint', {url});
+    this.#xhrBreakpoints.delete(url);
+  }
+
+  /**
+   * Get all tracked XHR breakpoint URL patterns.
+   */
+  getXHRBreakpoints(): string[] {
+    return Array.from(this.#xhrBreakpoints);
+  }
+
+  /**
+   * Re-set all XHR breakpoints via CDP.
+   * Called after navigation since Chrome resets DOMDebugger state.
+   */
+  async restoreXHRBreakpoints(): Promise<void> {
+    if (!this.#client) {
+      return;
+    }
+    for (const url of this.#xhrBreakpoints) {
+      try {
+        await this.#client.send('DOMDebugger.setXHRBreakpoint', {url});
+      } catch {
+        // Skip breakpoints that fail to restore
+      }
+    }
+  }
+
   // ==================== Breakpoint Management ====================
 
   /**
@@ -588,7 +788,8 @@ export class DebuggerContext {
       lineNumber,
       columnNumber,
       condition,
-      locations: result.locations.map(loc => ({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      locations: result.locations.map((loc: any) => ({
         scriptId: loc.scriptId,
         lineNumber: loc.lineNumber,
         columnNumber: loc.columnNumber ?? 0,
@@ -634,7 +835,9 @@ export class DebuggerContext {
       lineNumber,
       columnNumber,
       condition,
-      locations: result.locations.map(loc => ({
+      isRegex: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      locations: result.locations.map((loc: any) => ({
         scriptId: loc.scriptId,
         lineNumber: loc.lineNumber,
         columnNumber: loc.columnNumber ?? 0,
@@ -659,7 +862,7 @@ export class DebuggerContext {
   }
 
   /**
-   * Remove all breakpoints.
+   * Remove all breakpoints (code breakpoints + XHR breakpoints).
    */
   async removeAllBreakpoints(): Promise<void> {
     if (!this.#client) {
@@ -672,6 +875,15 @@ export class DebuggerContext {
         await this.removeBreakpoint(breakpointId);
       } catch {
         // Ignore errors for individual breakpoints
+      }
+    }
+
+    const xhrUrls = Array.from(this.#xhrBreakpoints);
+    for (const url of xhrUrls) {
+      try {
+        await this.removeXHRBreakpoint(url);
+      } catch {
+        // Ignore errors for individual XHR breakpoints
       }
     }
   }

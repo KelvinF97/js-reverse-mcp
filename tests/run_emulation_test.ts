@@ -1,11 +1,8 @@
-
-import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createServer } from 'http';
-import { readFile } from 'fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -45,7 +42,7 @@ async function runTests() {
   const transport = new StdioClientTransport({
     command: 'node',
     args: [
-      join(__dirname, '../build/src/index.js'),
+      join(__dirname, '../src/index.js'),
       '--isolated=true',
       '--headless=true'
     ]
@@ -75,7 +72,10 @@ async function runTests() {
 
   // Helper to extract JSON from markdown response
   function extractJsonResult(content: any): any {
-    const text = content[0].text;
+    const text = content
+      .filter((item: {type?: string}) => item.type === 'text')
+      .map((item: {text: string}) => item.text)
+      .join('\n');
     const match = text.match(/```json\n([\s\S]*?)\n```/);
     if (match) {
       return JSON.parse(match[1]);

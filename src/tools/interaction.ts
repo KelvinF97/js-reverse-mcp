@@ -41,14 +41,11 @@ export const clickTool = defineTool({
   },
   handler: async (req, _response, context) => {
     const {selector, button, clickCount, delay} = req.params;
-    const page = context.getSelectedPage();
-    const element = await page.waitForSelector(selector, {timeout: 5000});
-    if (!element) {
-      throw new Error(`Could not find element matching selector: ${selector}`);
-    }
+    const frame = context.getSelectedFrame();
+    const locator = frame.locator(selector);
 
     await context.waitForEventsAfterAction(async () => {
-      await element.click({button, clickCount, delay});
+      await locator.click({button, clickCount, delay, timeout: 5000});
     });
   },
 });
@@ -75,13 +72,10 @@ export const typeTool = defineTool({
   },
   handler: async (req, _response, context) => {
     const {selector, text, delay} = req.params;
-    const page = context.getSelectedPage();
-    const element = await page.waitForSelector(selector, {timeout: 5000});
-    if (!element) {
-      throw new Error(`Could not find element matching selector: ${selector}`);
-    }
+    const frame = context.getSelectedFrame();
+    const locator = frame.locator(selector);
 
-    await element.type(text, {delay});
+    await locator.type(text, {delay, timeout: 5000});
   },
 });
 
@@ -99,13 +93,10 @@ export const hoverTool = defineTool({
   },
   handler: async (req, _response, context) => {
     const {selector} = req.params;
-    const page = context.getSelectedPage();
-    const element = await page.waitForSelector(selector, {timeout: 5000});
-    if (!element) {
-      throw new Error(`Could not find element matching selector: ${selector}`);
-    }
+    const frame = context.getSelectedFrame();
+    const locator = frame.locator(selector);
 
-    await element.hover();
+    await locator.hover({timeout: 5000});
   },
 });
 
@@ -133,22 +124,16 @@ export const scrollTool = defineTool({
   handler: async (req, _response, context) => {
     const {selector, x, y} = req.params;
     const page = context.getSelectedPage();
+    const frame = context.getSelectedFrame();
 
     if (selector) {
-      const element = await page.waitForSelector(selector, {timeout: 5000});
-      if (!element) {
-        throw new Error(
-          `Could not find element matching selector: ${selector}`,
-        );
-      }
-      await element.scrollIntoView();
+      await frame.locator(selector).scrollIntoViewIfNeeded({timeout: 5000});
     } else if (x !== undefined || y !== undefined) {
       await page.evaluate(
-        (scrollX, scrollY) => {
+        ({scrollX, scrollY}: {scrollX?: number; scrollY?: number}) => {
           window.scrollTo(scrollX ?? window.scrollX, scrollY ?? window.scrollY);
         },
-        x,
-        y,
+        {scrollX: x, scrollY: y},
       );
     } else {
       throw new Error('Must provide either a selector or coordinates (x/y)');
@@ -210,24 +195,16 @@ export const fillField = defineTool({
   },
   handler: async (req, response, context) => {
     const {selector, value} = req.params;
-    const page = context.getSelectedPage();
-    const element = await page.waitForSelector(selector, {timeout: 5000});
-    if (!element) {
-      throw new Error(`Could not find element matching selector: ${selector}`);
-    }
+    const frame = context.getSelectedFrame();
+    const locator = frame.locator(selector);
 
     await context.waitForEventsAfterAction(async () => {
-      const tagName = await element.evaluate(el =>
-        el.tagName.toLowerCase(),
-      );
+      const tagName = await locator.evaluate(el => el.tagName.toLowerCase());
 
       if (tagName === 'select') {
-        await page.select(selector, value);
+        await locator.selectOption(value, {timeout: 5000});
       } else {
-        await element.evaluate(el => {
-          (el as HTMLInputElement).value = '';
-        });
-        await element.type(value);
+        await locator.fill(value, {timeout: 5000});
       }
     });
 

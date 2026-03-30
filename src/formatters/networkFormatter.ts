@@ -9,18 +9,38 @@ import {isUtf8} from 'node:buffer';
 import type {HTTPRequest, HTTPResponse} from '../third_party/index.js';
 
 const BODY_CONTEXT_SIZE_LIMIT = 10000;
+const BODY_FETCH_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Timed out fetching body')), ms),
+    ),
+  ]);
+}
 
 export function getShortDescriptionForRequest(
   request: HTTPRequest,
   id: number,
   selectedInDevToolsUI = false,
 ): string {
-  // TODO truncate the URL
-  return `reqid=${id} ${request.method()} ${request.url()} ${getStatusFromRequest(request)}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+  return `reqid=${id} [${request.resourceType()}] ${request.method()} ${request.url()} ${getStatusFromRequest(request)}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
 }
 
 export function getStatusFromRequest(request: HTTPRequest): string {
-  const httpResponse = request.response();
+  // In Playwright, request.response() is async, but we cache the failure info
+  const failure = request.failure();
+  if (failure) {
+    return `[failed - ${failure.errorText}]`;
+  }
+  // We can't synchronously get the response in Playwright.
+  // Return pending for now - the detailed view will show the response.
+  return '[pending]';
+}
+
+export async function getStatusFromRequestAsync(request: HTTPRequest): Promise<string> {
+  const httpResponse = await request.response();
   const failure = request.failure();
   let status: string;
   if (httpResponse) {
@@ -52,7 +72,7 @@ export async function getFormattedResponseBody(
   sizeLimit = BODY_CONTEXT_SIZE_LIMIT,
 ): Promise<string | undefined> {
   try {
-    const responseBuffer = await httpResponse.buffer();
+    const responseBuffer = await withTimeout(httpResponse.body(), BODY_FETCH_TIMEOUT_MS);
 
     if (isUtf8(responseBuffer)) {
       const responseAsTest = responseBuffer.toString('utf-8');
@@ -74,22 +94,11 @@ export async function getFormattedRequestBody(
   httpRequest: HTTPRequest,
   sizeLimit: number = BODY_CONTEXT_SIZE_LIMIT,
 ): Promise<string | undefined> {
-  if (httpRequest.hasPostData()) {
-    const data = httpRequest.postData();
+  // In Playwright, postData() returns null|string synchronously
+  const data = httpRequest.postData();
 
-    if (data) {
-      return `${getSizeLimitedString(data, sizeLimit)}`;
-    }
-
-    try {
-      const fetchData = await httpRequest.fetchPostData();
-
-      if (fetchData) {
-        return `${getSizeLimitedString(fetchData, sizeLimit)}`;
-      }
-    } catch {
-      return `<not available anymore>`;
-    }
+  if (data) {
+    return `${getSizeLimitedString(data, sizeLimit)}`;
   }
 
   return;

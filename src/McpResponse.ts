@@ -27,7 +27,6 @@ import type {McpContext} from './McpContext.js';
 import type {
   ConsoleMessage,
   ImageContent,
-  ResourceType,
   TextContent,
 } from './third_party/index.js';
 import type {ImageContentData, Response} from './tools/ToolDefinition.js';
@@ -43,7 +42,8 @@ export class McpResponse implements Response {
   #networkRequestsOptions?: {
     include: boolean;
     pagination?: PaginationOptions;
-    resourceTypes?: ResourceType[];
+    resourceTypes?: string[];
+    urlFilter?: string;
     includePreservedRequests?: boolean;
     networkRequestIdInDevToolsUI?: number;
   };
@@ -68,7 +68,8 @@ export class McpResponse implements Response {
   setIncludeNetworkRequests(
     value: boolean,
     options?: PaginationOptions & {
-      resourceTypes?: ResourceType[];
+      resourceTypes?: string[];
+      urlFilter?: string;
       includePreservedRequests?: boolean;
       networkRequestIdInDevToolsUI?: number;
     },
@@ -88,6 +89,7 @@ export class McpResponse implements Response {
             }
           : undefined,
       resourceTypes: options?.resourceTypes,
+      urlFilter: options?.urlFilter,
       includePreservedRequests: options?.includePreservedRequests,
       networkRequestIdInDevToolsUI: options?.networkRequestIdInDevToolsUI,
     };
@@ -223,7 +225,8 @@ export class McpResponse implements Response {
 
       bodies.requestBody = await getFormattedRequestBody(request);
 
-      const response = request.response();
+      // In Playwright, request.response() is async
+      const response = await request.response();
       if (response) {
         bodies.responseBody = await getFormattedResponseBody(response);
       }
@@ -383,6 +386,15 @@ export class McpResponse implements Response {
         idx++;
       }
       response.push(...parts);
+
+      // Show selected frame if not main frame
+      const selectedFrame = context.getSelectedFrame();
+      const mainFrame = context.getSelectedPage().mainFrame();
+      if (selectedFrame !== mainFrame) {
+        const name = selectedFrame.name() ? ` name="${selectedFrame.name()}"` : '';
+        response.push(`## Selected Frame`);
+        response.push(`${selectedFrame.url()}${name}`);
+      }
     }
 
     response.push(...this.#formatNetworkRequestData(context, data.bodies));
@@ -404,11 +416,23 @@ export class McpResponse implements Response {
         });
       }
 
+      // Apply URL filter if specified
+      if (this.#networkRequestsOptions.urlFilter) {
+        const filterPattern =
+          this.#networkRequestsOptions.urlFilter.toLowerCase();
+        requests = requests.filter(r =>
+          r.url().toLowerCase().includes(filterPattern),
+        );
+      }
+
+      // Show newest requests first
+      requests.reverse();
+
       response.push('## Network requests');
       if (requests.length) {
         const data = this.#dataWithPagination(
           requests,
-          this.#networkRequestsOptions.pagination,
+          this.#networkRequestsOptions.pagination ?? {pageSize: 20, pageIdx: 0},
         );
         response.push(...data.info);
         for (const request of data.items) {
@@ -567,26 +591,27 @@ export class McpResponse implements Response {
       response.push(data.requestBody);
     }
 
-    const httpResponse = httpRequest.response();
-    if (httpResponse) {
-      response.push(`### Response Headers`);
-      for (const line of getFormattedHeaderValue(httpResponse.headers())) {
-        response.push(line);
-      }
-    }
+    // Note: response headers are handled in the async path above
+    // since request.response() is async in Playwright
 
     if (data.responseBody) {
       response.push(`### Response Body`);
       response.push(data.responseBody);
     }
 
-    const httpFailure = httpRequest.failure();
-    if (httpFailure) {
+    const failure = httpRequest.failure();
+    if (failure) {
       response.push(`### Request failed with`);
-      response.push(httpFailure.errorText);
+      response.push(failure.errorText);
     }
 
-    const redirectChain = httpRequest.redirectChain();
+    // In Playwright, there's no redirectChain() - use redirectedFrom() instead
+    const redirectChain: Array<typeof httpRequest> = [];
+    let current = httpRequest.redirectedFrom();
+    while (current) {
+      redirectChain.push(current);
+      current = current.redirectedFrom();
+    }
     if (redirectChain.length) {
       response.push(`### Redirect chain`);
       let indent = 0;

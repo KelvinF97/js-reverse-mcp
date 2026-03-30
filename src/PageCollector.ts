@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {Protocol} from 'devtools-protocol';
+
 import type {
   AggregatedIssue,
   Common,
@@ -15,22 +17,17 @@ import {
   IssueAggregator,
 } from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 
+import type {CdpSessionProvider} from './CdpSessionProvider.js';
 import {FakeIssuesManager} from './DevtoolsUtils.js';
 import {features} from './features.js';
 import {logger} from './logger.js';
 import type {
+  BrowserContext,
   CDPSession,
   ConsoleMessage,
-  Protocol,
-  Target,
-} from './third_party/index.js';
-import {
-  type Browser,
-  type Frame,
-  type Handler,
-  type HTTPRequest,
-  type Page,
-  type PageEvents as PuppeteerPageEvents,
+  Frame,
+  HTTPRequest,
+  Page,
 } from './third_party/index.js';
 
 /**
@@ -68,7 +65,15 @@ export interface RequestInitiator {
   };
 }
 
-interface PageEvents extends PuppeteerPageEvents {
+// Playwright page events relevant for collection
+interface PageEvents {
+  console: ConsoleMessage;
+  pageerror: Error;
+  request: HTTPRequest;
+  requestfailed: HTTPRequest;
+  requestfinished: HTTPRequest;
+  response: import('./third_party/index.js').Response;
+  framenavigated: Frame;
   issue: AggregatedIssue;
 }
 
@@ -92,13 +97,13 @@ type WithSymbolId<T> = T & {
 };
 
 export class PageCollector<T> {
-  #browser: Browser;
+  #context: BrowserContext;
   #listenersInitializer: (
     collector: (item: T) => void,
   ) => ListenerMap<PageEvents>;
   #listeners = new WeakMap<Page, ListenerMap>();
   #maxNavigationSaved = 3;
-  #includeAllPages?: boolean;
+  #maxItemsPerNavigation = 1000;
 
   /**
    * This maps a Page to a list of navigations with a sub-list
@@ -108,44 +113,35 @@ export class PageCollector<T> {
   protected storage = new WeakMap<Page, Array<Array<WithSymbolId<T>>>>();
 
   constructor(
-    browser: Browser,
+    context: BrowserContext,
     listeners: (collector: (item: T) => void) => ListenerMap<PageEvents>,
-    includeAllPages?: boolean,
   ) {
-    this.#browser = browser;
+    this.#context = context;
     this.#listenersInitializer = listeners;
-    this.#includeAllPages = includeAllPages;
+  }
+
+  protected get context(): BrowserContext {
+    return this.#context;
   }
 
   async init() {
-    const pages = await this.#browser.pages(this.#includeAllPages);
+    const pages = this.#context.pages();
     for (const page of pages) {
       this.addPage(page);
     }
 
-    this.#browser.on('targetcreated', this.#onTargetCreated);
-    this.#browser.on('targetdestroyed', this.#onTargetDestroyed);
+    this.#context.on('page', this.#onPageCreated);
   }
 
   dispose() {
-    this.#browser.off('targetcreated', this.#onTargetCreated);
-    this.#browser.off('targetdestroyed', this.#onTargetDestroyed);
+    this.#context.off('page', this.#onPageCreated);
   }
 
-  #onTargetCreated = async (target: Target) => {
-    const page = await target.page();
-    if (!page) {
-      return;
-    }
+  #onPageCreated = (page: Page) => {
     this.addPage(page);
-  };
-
-  #onTargetDestroyed = async (target: Target) => {
-    const page = await target.page();
-    if (!page) {
-      return;
-    }
-    this.cleanupPageDestroyed(page);
+    page.on('close', () => {
+      this.cleanupPageDestroyed(page);
+    });
   };
 
   public addPage(page: Page) {
@@ -166,6 +162,9 @@ export class PageCollector<T> {
 
       const navigations = this.storage.get(page) ?? [[]];
       navigations[0].push(withId);
+      if (navigations[0].length > this.#maxItemsPerNavigation) {
+        navigations[0].shift();
+      }
     });
 
     listeners['framenavigated'] = (frame: Frame) => {
@@ -177,7 +176,7 @@ export class PageCollector<T> {
     };
 
     for (const [name, listener] of Object.entries(listeners)) {
-      page.on(name, listener as Handler<unknown>);
+      page.on(name as any, listener as any);
     }
 
     this.#listeners.set(page, listeners);
@@ -197,7 +196,7 @@ export class PageCollector<T> {
     const listeners = this.#listeners.get(page);
     if (listeners) {
       for (const [name, listener] of Object.entries(listeners)) {
-        page.off(name, listener as Handler<unknown>);
+        page.off(name as any, listener as any);
       }
     }
     this.storage.delete(page);
@@ -264,14 +263,70 @@ export class ConsoleCollector extends PageCollector<
   ConsoleMessage | Error | AggregatedIssue
 > {
   #subscribedPages = new WeakMap<Page, PageIssueSubscriber>();
+  #sessionProvider: CdpSessionProvider;
+  // Per-page issue collectors that feed into the PageCollector's storage
+  #pageIssueCollectors = new WeakMap<Page, (issue: AggregatedIssue) => void>();
+  #cdpReady = false;
+
+  constructor(
+    context: BrowserContext,
+    sessionProvider: CdpSessionProvider,
+    listeners: (
+      collector: (item: ConsoleMessage | Error | AggregatedIssue) => void,
+    ) => ListenerMap<PageEvents>,
+  ) {
+    // Wrap the original listener initializer to capture per-page collectors
+    const wrappedListeners = (collector: (item: ConsoleMessage | Error | AggregatedIssue) => void) => {
+      // Call the original to get the base listeners
+      const baseListeners = listeners(collector);
+      // The 'issue' key in baseListeners calls collector(event)
+      // We'll also use this collector reference for PageIssueSubscriber
+      return baseListeners;
+    };
+    super(context, wrappedListeners);
+    this.#sessionProvider = sessionProvider;
+  }
 
   override addPage(page: Page): void {
     super.addPage(page);
+    // Only set up CDP issue subscriber if CDP has been initialized
+    if (this.#cdpReady) {
+      this.#setupIssueSubscriber(page);
+    }
+  }
+
+  /**
+   * Initialize CDP-dependent features (Audits.enable for issue collection).
+   * Called lazily to avoid leaking CDP signals during navigation.
+   */
+  async initCdp(): Promise<void> {
+    if (this.#cdpReady) return;
+    this.#cdpReady = true;
+    // Set up issue subscribers for all already-tracked pages
+    for (const page of this.context.pages()) {
+      if (this.storage.has(page)) {
+        this.#setupIssueSubscriber(page);
+      }
+    }
+  }
+
+  #setupIssueSubscriber(page: Page): void {
     if (!features.issues) {
       return;
     }
     if (!this.#subscribedPages.has(page)) {
-      const subscriber = new PageIssueSubscriber(page);
+      // Create a direct collector that adds issues to this page's storage with stable IDs
+      const idGen = createIdGenerator();
+      const issueCollector = (issue: AggregatedIssue) => {
+        const navigations = this.storage.get(page);
+        if (navigations && navigations[0]) {
+          const withId = issue as ConsoleMessage | Error | AggregatedIssue & {[stableIdSymbol]?: number};
+          (withId as any)[stableIdSymbol] = idGen();
+          navigations[0].push(withId as any);
+        }
+      };
+      this.#pageIssueCollectors.set(page, issueCollector);
+      const subscriber = new PageIssueSubscriber(page, this.#sessionProvider, issueCollector);
       this.#subscribedPages.set(page, subscriber);
       void subscriber.subscribe();
     }
@@ -290,12 +345,14 @@ class PageIssueSubscriber {
   #seenKeys = new Set<string>();
   #seenIssues = new Set<AggregatedIssue>();
   #page: Page;
-  #session: CDPSession;
+  #sessionProvider: CdpSessionProvider;
+  #session: CDPSession | null = null;
+  #onIssueCallback: (issue: AggregatedIssue) => void;
 
-  constructor(page: Page) {
+  constructor(page: Page, sessionProvider: CdpSessionProvider, onIssue: (issue: AggregatedIssue) => void) {
     this.#page = page;
-    // @ts-expect-error use existing CDP client (internal Puppeteer API).
-    this.#session = this.#page._client() as CDPSession;
+    this.#sessionProvider = sessionProvider;
+    this.#onIssueCallback = onIssue;
   }
 
   #resetIssueAggregator() {
@@ -317,8 +374,9 @@ class PageIssueSubscriber {
   async subscribe() {
     this.#resetIssueAggregator();
     this.#page.on('framenavigated', this.#onFrameNavigated);
-    this.#session.on('Audits.issueAdded', this.#onIssueAdded);
     try {
+      this.#session = await this.#sessionProvider.getSession(this.#page);
+      this.#session.on('Audits.issueAdded' as any, this.#onIssueAdded);
       await this.#session.send('Audits.enable');
     } catch (error) {
       logger('Error subscribing to issues', error);
@@ -329,16 +387,20 @@ class PageIssueSubscriber {
     this.#seenKeys.clear();
     this.#seenIssues.clear();
     this.#page.off('framenavigated', this.#onFrameNavigated);
-    this.#session.off('Audits.issueAdded', this.#onIssueAdded);
+    if (this.#session) {
+      this.#session.off('Audits.issueAdded' as any, this.#onIssueAdded);
+    }
     if (this.#issueAggregator) {
       this.#issueAggregator.removeEventListener(
         IssueAggregatorEvents.AGGREGATED_ISSUE_UPDATED,
         this.#onAggregatedissue,
       );
     }
-    void this.#session.send('Audits.disable').catch(() => {
-      // might fail.
-    });
+    if (this.#session) {
+      void this.#session.send('Audits.disable').catch(() => {
+        // might fail.
+      });
+    }
   }
 
   #onAggregatedissue = (
@@ -348,7 +410,7 @@ class PageIssueSubscriber {
       return;
     }
     this.#seenIssues.add(event.data);
-    this.#page.emit('issue', event.data);
+    this.#onIssueCallback(event.data);
   };
 
   // On navigation, we reset issue aggregation.
@@ -365,7 +427,7 @@ class PageIssueSubscriber {
   #onIssueAdded = (data: Protocol.Audits.IssueAddedEvent) => {
     try {
       const inspectorIssue = data.issue;
-      // @ts-expect-error Types of protocol from Puppeteer and CDP are
+      // @ts-expect-error Types of protocol from Playwright and CDP are
       // incomparable for InspectorIssueCode, one is union, other is enum.
       const issue = createIssuesFromProtocolIssue(null, inspectorIssue)[0];
       if (!issue) {
@@ -392,35 +454,62 @@ class PageIssueSubscriber {
   };
 }
 
+const cdpRequestIdSymbol = Symbol('cdpRequestId');
+type RequestWithCdpId = HTTPRequest & {
+  [cdpRequestIdSymbol]?: string;
+};
+
 export class NetworkCollector extends PageCollector<HTTPRequest> {
   #initiators = new WeakMap<Page, Map<string, RequestInitiator>>();
-  #cdpListeners = new WeakMap<
-    Page,
-    (event: Protocol.Network.RequestWillBeSentEvent) => void
-  >();
+  #cdpListeners = new WeakMap<Page, () => void>();
+  #sessionProvider: CdpSessionProvider;
+  #cdpReady = false;
 
   constructor(
-    browser: Browser,
-    listeners: (
+    context: BrowserContext,
+    sessionProvider: CdpSessionProvider,
+    listeners?: (
       collector: (item: HTTPRequest) => void,
-    ) => ListenerMap<PageEvents> = collect => {
-      return {
-        request: req => {
-          collect(req);
-        },
-      } as ListenerMap;
-    },
-    includeAllPages?: boolean,
+    ) => ListenerMap<PageEvents>,
   ) {
-    super(browser, listeners, includeAllPages);
+    super(
+      context,
+      listeners ??
+        (collect => {
+          return {
+            request: req => {
+              collect(req);
+            },
+          } as ListenerMap;
+        }),
+    );
+    this.#sessionProvider = sessionProvider;
   }
 
   override addPage(page: Page): void {
     super.addPage(page);
-    this.#setupInitiatorCollection(page);
+    // Only set up CDP initiator collection if CDP has been initialized
+    if (this.#cdpReady) {
+      void this.#setupInitiatorCollection(page);
+    }
   }
 
-  #setupInitiatorCollection(page: Page): void {
+  /**
+   * Initialize CDP-dependent features (initiator collection).
+   * Called lazily to avoid leaking CDP signals during navigation.
+   */
+  async initCdp(): Promise<void> {
+    if (this.#cdpReady) return;
+    this.#cdpReady = true;
+    // Set up CDP initiator collection for all already-tracked pages
+    for (const page of this.context.pages()) {
+      if (this.storage.has(page)) {
+        void this.#setupInitiatorCollection(page);
+      }
+    }
+  }
+
+  async #setupInitiatorCollection(page: Page): Promise<void> {
     if (this.#initiators.has(page)) {
       return;
     }
@@ -428,37 +517,68 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     const initiatorMap = new Map<string, RequestInitiator>();
     this.#initiators.set(page, initiatorMap);
 
-    // Listen to CDP events for initiator info
-    const onRequestWillBeSent = (
-      event: Protocol.Network.RequestWillBeSentEvent,
-    ): void => {
-      if (event.initiator) {
-        initiatorMap.set(event.requestId, event.initiator as RequestInitiator);
-      }
-    };
+    try {
+      const client = await this.#sessionProvider.getSession(page);
 
-    this.#cdpListeners.set(page, onRequestWillBeSent);
+      // Listen to CDP events for initiator info and request ID mapping
+      const onRequestWillBeSent = (
+        event: Protocol.Network.RequestWillBeSentEvent,
+      ): void => {
+        if (event.initiator) {
+          initiatorMap.set(event.requestId, event.initiator as RequestInitiator);
+        }
 
-    // @ts-expect-error _client is internal Puppeteer API
-    const client = page._client() as CDPSession;
-    client.on('Network.requestWillBeSent', onRequestWillBeSent);
+        // Map CDP request ID to Playwright Request via URL+method matching
+        // This allows us to correlate Playwright Request objects with CDP request IDs
+        const navigations = this.storage.get(page);
+        if (navigations) {
+          for (const navigation of navigations) {
+            for (const request of navigation) {
+              const req = request as RequestWithCdpId;
+              if (
+                !req[cdpRequestIdSymbol] &&
+                req.url() === event.request.url &&
+                req.method() === event.request.method
+              ) {
+                req[cdpRequestIdSymbol] = event.requestId;
+                break;
+              }
+            }
+          }
+        }
+      };
+
+      client.on('Network.requestWillBeSent' as any, onRequestWillBeSent);
+
+      const cleanup = () => {
+        client.off('Network.requestWillBeSent' as any, onRequestWillBeSent);
+      };
+      this.#cdpListeners.set(page, cleanup);
+    } catch {
+      // Page might already be closed
+    }
   }
 
   protected override cleanupPageDestroyed(page: Page): void {
     super.cleanupPageDestroyed(page);
 
-    const listener = this.#cdpListeners.get(page);
-    if (listener) {
+    const cleanup = this.#cdpListeners.get(page);
+    if (cleanup) {
       try {
-        // @ts-expect-error _client is internal Puppeteer API
-        const client = page._client() as CDPSession;
-        client.off('Network.requestWillBeSent', listener);
+        cleanup();
       } catch {
         // Page might already be closed
       }
     }
     this.#cdpListeners.delete(page);
     this.#initiators.delete(page);
+  }
+
+  /**
+   * Get the CDP request ID for a request.
+   */
+  getCdpRequestId(request: HTTPRequest): string | undefined {
+    return (request as RequestWithCdpId)[cdpRequestIdSymbol];
   }
 
   /**
@@ -472,8 +592,10 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     if (!initiatorMap) {
       return undefined;
     }
-    // @ts-expect-error id is internal Puppeteer API
-    const requestId = request.id as string;
+    const requestId = this.getCdpRequestId(request);
+    if (!requestId) {
+      return undefined;
+    }
     return initiatorMap.get(requestId);
   }
 
@@ -497,9 +619,14 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     const requests = navigations[0];
 
     const lastRequestIdx = requests.findLastIndex(request => {
-      return request.frame() === page.mainFrame()
-        ? request.isNavigationRequest()
-        : false;
+      try {
+        return request.frame() === page.mainFrame()
+          ? request.isNavigationRequest()
+          : false;
+      } catch {
+        // frame() can throw for service worker requests
+        return false;
+      }
     });
 
     // Keep all requests since the last navigation request including that

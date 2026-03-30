@@ -1,7 +1,4 @@
-
-import { spawn } from 'child_process';
 import { createServer } from 'http';
-import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -12,15 +9,46 @@ const __dirname = dirname(__filename);
 
 // 1. Start a simple HTTP server to serve the fixture
 const PORT = 8080;
-const server = createServer(async (req, res) => {
-  try {
-    const content = await readFile(join(__dirname, 'fixtures', 'interaction.html'));
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(content);
-  } catch (err) {
-    res.writeHead(404);
-    res.end('Not found');
-  }
+const server = createServer((_req, res) => {
+  res.writeHead(200, {'Content-Type': 'text/html'});
+  res.end(`
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>Interaction Test</title>
+      </head>
+      <body>
+        <h1>Interaction Test Page</h1>
+
+        <button id="click-btn">Click Me</button>
+        <div id="click-result">Not Clicked</div>
+
+        <input type="text" id="type-input" placeholder="Type here...">
+        <div id="type-result">Nothing typed</div>
+
+        <div id="hover-box" style="width: 100px; height: 100px; background-color: lightgray;">Hover Me</div>
+        <div id="hover-result">Not Hovered</div>
+
+        <div style="height: 2000px;">Spacer</div>
+        <div id="scroll-target">I am at the bottom</div>
+
+        <script>
+          document.getElementById('click-btn').addEventListener('click', () => {
+            document.getElementById('click-result').textContent = 'Clicked!';
+          });
+
+          document.getElementById('type-input').addEventListener('input', event => {
+            document.getElementById('type-result').textContent = 'Typed: ' + event.target.value;
+          });
+
+          document.getElementById('hover-box').addEventListener('mouseenter', () => {
+            document.getElementById('hover-result').textContent = 'Hovered!';
+          });
+        </script>
+      </body>
+    </html>
+  `);
 });
 
 server.listen(PORT, async () => {
@@ -44,7 +72,7 @@ async function runTests() {
   const transport = new StdioClientTransport({
     command: 'node',
     args: [
-      join(__dirname, '../build/src/index.js'),
+      join(__dirname, '../src/index.js'),
       '--isolated=true',  // Use isolated profile
       '--headless=true'   // Run headless for tests
     ]
@@ -78,7 +106,10 @@ async function runTests() {
 
   // Helper to extract JSON from markdown response
   function extractJsonResult(content: any): string {
-    const text = content[0].text;
+    const text = content
+      .filter((item: {type?: string}) => item.type === 'text')
+      .map((item: {text: string}) => item.text)
+      .join('\n');
     const match = text.match(/```json\n([\s\S]*?)\n```/);
     if (match) {
       return JSON.parse(match[1]);

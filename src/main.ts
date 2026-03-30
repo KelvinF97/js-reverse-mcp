@@ -6,8 +6,9 @@
 
 import './polyfill.js';
 
-import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
+import type {Channel} from './browser.js';
+import type {BrowserResult} from './browser.js';
 import {parseArguments} from './cli.js';
 import {features} from './features.js';
 import {loadIssueDescriptions} from './issue-descriptions.js';
@@ -24,6 +25,7 @@ import {
 import {ToolCategory} from './tools/categories.js';
 import * as consoleTools from './tools/console.js';
 import * as debuggerTools from './tools/debugger.js';
+import * as frameTools from './tools/frames.js';
 import * as networkTools from './tools/network.js';
 import * as pagesTools from './tools/pages.js';
 import * as screenshotTools from './tools/screenshot.js';
@@ -46,8 +48,10 @@ const logFile = args.logFile ? saveLogsToFile(args.logFile) : undefined;
 logger(`Starting Chrome DevTools MCP Server v${VERSION}`);
 const server = new McpServer(
   {
-    name: 'chrome_devtools',
-    title: 'Chrome DevTools MCP server',
+    name: 'js-reverse',
+    title: 'JS Reverse Engineering MCP Server',
+    description:
+      'JavaScript reverse engineering and debugging via Chrome DevTools. Built on Patchright anti-detection engine — passes mainstream browser fingerprint checks (Zhihu, Google, etc.) out of the box.',
     version: VERSION,
   },
   {capabilities: {logging: {}}},
@@ -57,34 +61,46 @@ server.server.setRequestHandler(SetLevelRequestSchema, () => {
 });
 
 let context: McpContext;
+
+// No JS-level init scripts — Patchright's C++ patches + STEALTH_ARGS handle
+// anti-detection at the browser level. JS patches (Error.prepareStackTrace,
+// screen property overrides, fake chrome.runtime) actually CAUSE detection
+// because anti-bot systems check for Object.defineProperty tampering.
+
 async function getContext(): Promise<McpContext> {
   const extraArgs: string[] = (args.chromeArg ?? []).map(String);
   if (args.proxyServer) {
     extraArgs.push(`--proxy-server=${args.proxyServer}`);
   }
   const devtools = args.experimentalDevtools ?? false;
-  const browser =
-    args.browserUrl || args.wsEndpoint
-      ? await ensureBrowserConnected({
-          browserURL: args.browserUrl,
-          wsEndpoint: args.wsEndpoint,
-          wsHeaders: args.wsHeaders,
-          devtools,
-        })
-      : await ensureBrowserLaunched({
-          headless: args.headless,
-          executablePath: args.executablePath,
-          channel: args.channel as Channel,
-          isolated: args.isolated,
-          logFile,
-          viewport: args.viewport,
-          args: extraArgs,
-          acceptInsecureCerts: args.acceptInsecureCerts,
-          devtools,
-        });
+  let result: BrowserResult;
+  if (args.browserUrl || args.wsEndpoint) {
+    result = await ensureBrowserConnected({
+      browserURL: args.browserUrl,
+      wsEndpoint: args.wsEndpoint,
+      wsHeaders: args.wsHeaders,
+      devtools,
+    });
+  } else {
+    result = await ensureBrowserLaunched({
+      headless: args.headless,
+      executablePath: args.executablePath,
+      channel: args.channel as Channel,
+      isolated: args.isolated,
+      logFile,
+      viewport: args.viewport,
+      args: extraArgs,
+      acceptInsecureCerts: args.acceptInsecureCerts,
+      devtools,
+      hideCanvas: args.hideCanvas,
+      blockWebrtc: args.blockWebrtc,
+      disableWebgl: args.disableWebgl,
+      noStealth: args.noStealth,
+    });
+  }
 
-  if (context?.browser !== browser) {
-    context = await McpContext.from(browser, logger, {
+  if (!context || context.browserContext !== result.context) {
+    context = await McpContext.from(result.context, logger, {
       experimentalDevToolsDebugging: devtools,
       experimentalIncludeAllPages: args.experimentalIncludeAllPages,
     });
@@ -122,7 +138,13 @@ function registerTool(tool: ToolDefinition): void {
         logger(`${tool.name} request: ${JSON.stringify(params, null, '  ')}`);
         const context = await getContext();
         logger(`${tool.name} context: resolved`);
-        await context.detectOpenDevToolsWindows();
+        // Navigation tools must operate in complete CDP silence.
+        // Anti-bot systems detect ANY CDP activity during page load,
+        // including session creation from detectOpenDevToolsWindows().
+        if (tool.annotations.category !== ToolCategory.NAVIGATION) {
+          await context.ensureCollectorsInitialized();
+          await context.detectOpenDevToolsWindows();
+        }
         const response = new McpResponse();
         await tool.handler(
           {
@@ -163,6 +185,7 @@ function registerTool(tool: ToolDefinition): void {
 const tools = [
   ...Object.values(consoleTools),
   ...Object.values(debuggerTools),
+  ...Object.values(frameTools),
   ...Object.values(networkTools),
   ...Object.values(pagesTools),
   ...Object.values(screenshotTools),
