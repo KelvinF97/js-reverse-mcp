@@ -22,50 +22,13 @@ Built on the [Patchright](https://github.com/nicecaesar/patchright) anti-detecti
 
 ## Requirements
 
-- [Node.js](https://nodejs.org/) v20.19 or later
+- [Node.js](https://nodejs.org/) v22
 - [Chrome](https://www.google.com/chrome/) stable
-
-## Quick Start (npx)
-
-No installation required. Add to your MCP client configuration:
-
-```json
-{
-  "mcpServers": {
-    "js-reverse": {
-      "command": "npx",
-      "args": ["js-reverse-mcp"]
-    }
-  }
-}
-```
-
-### Claude Code
-
-```bash
-claude mcp add js-reverse npx js-reverse-mcp
-```
-
-### Codex
-
-```bash
-codex mcp add js-reverse -- npx js-reverse-mcp
-```
-
-### Cursor
-
-Go to `Cursor Settings` -> `MCP` -> `New MCP Server`, and use the configuration above.
-
-### VS Code Copilot
-
-```bash
-code --add-mcp '{"name":"js-reverse","command":"npx","args":["js-reverse-mcp"]}'
-```
 
 ## Local Installation (Alternative)
 
 ```bash
-git clone https://github.com/nicecaesar/js-reverse-mcp.git
+git clone git@git.dev.sh.ctripcorp.com:octopus/js-reverse-mcp.git
 cd js-reverse-mcp
 npm install
 npm run build
@@ -78,9 +41,13 @@ Then use local path in your MCP configuration:
   "mcpServers": {
     "js-reverse": {
       "command": "node",
-      "args": ["/path/to/js-reverse-mcp/build/src/index.js"]
+      "args": [
+        "/path/js-reverse-mcp/build/src/index.js",
+        "--headless=false",
+        "--isolated=true"
+      ]
     }
-  }
+	}
 }
 ```
 
@@ -318,7 +285,3 @@ If you are blocked when visiting certain sites (e.g. Zhihu returning error 40362
 ## Security Notice
 
 This tool exposes browser content to MCP clients, allowing inspection, debugging, and modification of any data in the browser. Do not use it on pages containing sensitive information.
-
-## License
-
-Apache-2.0
